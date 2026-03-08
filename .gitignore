@@ -1,12 +1,41 @@
-# Go
+# ── Runtime data ─────────────────────────────────────────────────────────────
 server/note.json
-server/go.sum
 
-# Swift / Xcode
-notes/mac/.build/
-notes/mac/*.xcodeproj/
-notes/mac/*.xcworkspace/
-*.DS_Store
+# ── Go ────────────────────────────────────────────────────────────────────────
+go.sum
+/server/amadeuz
+/server/amadeuz.exe
 
-# Rust (future)
+# ── Swift / SPM ───────────────────────────────────────────────────────────────
+.build/
+.swiftpm/
+
+# ── Xcode ─────────────────────────────────────────────────────────────────────
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+
+# ── Visual Studio ─────────────────────────────────────────────────────────────
+.vs/
+bin/
+obj/
+*.user
+UpgradeLog.htm
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+*.AppleDouble
+*.LSOverride
+
+# ── Windows ───────────────────────────────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+
+# ── Editors ───────────────────────────────────────────────────────────────────
+.idea/
+*.swp
+*.swo
+
+# ── Rust (future linux client) ────────────────────────────────────────────────
 target/
