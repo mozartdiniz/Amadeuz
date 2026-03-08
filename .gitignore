@@ -1,0 +1,12 @@
+# Go
+server/note.json
+server/go.sum
+
+# Swift / Xcode
+notes/mac/.build/
+notes/mac/*.xcodeproj/
+notes/mac/*.xcworkspace/
+*.DS_Store
+
+# Rust (future)
+target/
