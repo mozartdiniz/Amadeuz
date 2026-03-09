@@ -347,3 +347,151 @@ What is missing before calling this a real POC:
      FUTURE ENTRIES GO BELOW THIS LINE
      Format: ## [Date] — [Milestone title]
      ───────────────────────────────────────────── -->
+
+---
+
+## March 9, 2026 (evening) — The hard questions: users, encryption, sharing
+
+### Why this conversation happened now
+
+Three native clients. One server. Text syncs over LAN in real time. The proof of concept
+works. The next natural question is: what does this become?
+
+The immediate answer was: users, encryption, folders, sharing. But before writing any code,
+it was worth stepping back and asking the architecture question that would otherwise haunt
+every subsequent decision: should this be one server or multiple?
+
+### The microservices temptation
+
+The instinct, when you imagine a system that will eventually handle notes, files, contacts,
+reminders, and calendar — all as separate features — is to reach for microservices.
+One service per feature. Independent deployments. Independent scaling.
+
+But this project's constraint reverses all the usual tradeoffs. Microservices are designed
+for teams at scale: multiple developers deploying independently, services with different
+resource profiles, failure isolation across many users. None of that applies here.
+The operator is a single person running a server at home.
+
+For self-hosting, microservices are a liability. You multiply the number of processes to
+manage, ports to expose, and things that can silently fail. The operator who just wants
+their notes to sync should not have to run a Docker Compose file with five services to do it.
+
+**Decision: modular monolith.** One binary, one database file, one config. Features are
+internal Go packages. Adding a new feature domain (files, contacts) means adding a new
+package, not a new service. The package boundaries enforce the same separation of concerns
+that microservices would, without any of the operational complexity.
+
+The one exception made: feature flags in the config file. An operator who does not want
+the reminders feature running can turn it off without rebuilding anything.
+
+### Choosing SQLite
+
+The current server stores its state in a JSON file. That was fine for one shared note.
+It is obviously wrong for multiple notes owned by different users with access control.
+
+SQLite was the right replacement. The less obvious choice was *which* SQLite driver.
+The standard Go SQLite driver (`mattn/go-sqlite3`) requires CGO — a C compiler.
+That means cross-compilation to ARM (for Raspberry Pi) requires a full cross-compilation
+toolchain, which is a significant setup burden.
+
+`modernc.org/sqlite` is a pure-Go port of SQLite. No CGO. Cross-compile with
+`GOOS=linux GOARCH=arm64 go build .` and it just works. For a project whose target
+deployment is a Raspberry Pi on someone's home network, this matters.
+
+### The E2E encryption design
+
+This is the genuinely hard part. "End-to-end encryption" is a phrase that is easy to say
+and difficult to implement correctly. The critical constraint: the server must be unable to
+read note content. Even if the database is stolen, the attacker gets random bytes.
+
+The design that satisfies this:
+
+Each note has a random 256-bit symmetric key (the "note key"). Note content is encrypted
+with this key using AES-256-GCM. The note key is never stored anywhere in plaintext — it
+is always wrapped (encrypted) using the owner's public key via X25519 ECDH.
+
+The mechanics of key wrapping: generate a random ephemeral X25519 keypair, compute a
+Diffie-Hellman shared secret with the recipient's long-term public key, derive a wrapping
+key via HKDF, and encrypt the note key with AES-256-GCM. The result (ephemeral public key
++ ciphertext + nonce) is the "key envelope." The server stores one key envelope per
+authorized user per note.
+
+This scheme has one particularly elegant property: sharing a note with a new user does not
+require re-encrypting the note content (which may be large). It only requires re-wrapping
+the 32-byte note key for the new recipient — an operation that is O(1) in note size.
+
+On Apple platforms, all of this is available through CryptoKit (built into macOS and iOS),
+which means no third-party cryptography dependencies at all. The implementations are
+memory-safe, audited by Apple, and FIPS-compliant where relevant.
+
+### The echo guard problem
+
+There is a subtle bug that E2E encryption introduces into the existing sync logic.
+
+The current clients have an echo guard: when the server sends an update, the client
+stores that content as `lastReceivedContent`. When the debounce fires, it checks whether
+the current content equals `lastReceivedContent` — if so, it skips the send, because
+sending back what you just received would create an infinite loop.
+
+With encryption, this comparison breaks completely. AES-256-GCM uses a random 12-byte
+nonce on every encryption. Two encryptions of the same plaintext produce completely
+different ciphertext. So the client would always see "this ciphertext differs from what
+I received" and send, even for content that hasn't changed.
+
+The fix: replace the content equality check with a timestamp check. If the current
+`updatedAt` equals the `updatedAt` of the last received message, there is nothing new
+to send. This is actually more correct than the content check was — timestamps are the
+authoritative source of "has this changed," not the content itself.
+
+### What sharing actually means with E2E encryption
+
+This is where the design gets interesting. In a system without encryption, sharing is
+just an access control record in the database. But with E2E encryption, the server never
+has access to the note key — so it cannot re-encrypt the note for a new collaborator.
+Only the sharer can do this, because only the sharer has their own private key.
+
+This means sharing requires the sharer's device to be online at the time of sharing.
+There is no way around this in a true E2E system. The server cannot share on the owner's
+behalf. This is a deliberate tradeoff: you give up the ability to delegate sharing to
+the server in exchange for the server being cryptographically unable to read your content.
+
+Revoking access is similarly constrained. Removing a collaborator from the `note_shares`
+table prevents future access. But if the revoked user downloaded and cached the key
+envelope, they can still decrypt what they already have locally. Full revocation requires
+rotating the note key — re-encrypting the content with a new key, re-wrapping that key
+for all remaining collaborators, and uploading everything. This is an expensive but correct
+operation.
+
+For the POC, soft revocation (remove from database) is sufficient. Document the limitation.
+
+### Implementation order
+
+The four features have hard dependencies:
+
+1. **User accounts first** — everything else requires knowing who is making a request
+2. **Multiple notes** — sharing requires there to be individual notes to share
+3. **E2E encryption** — sharing requires the encryption layer to already exist
+4. **Sharing** — requires both multiple notes and E2E encryption
+
+Folders are independent once multiple notes exist. They can be built alongside phase 2.
+
+> 📝 *Write here: what was it like thinking through the encryption design? Was it
+> intimidating? Did you expect it to be more complicated than it turned out? What does
+> it feel like to know that the server you're building genuinely cannot read your data?*
+
+### Where things stand
+
+The architecture is decided. The database schema is designed. The implementation order
+is clear. Nothing has been built yet in this session — this was a planning session.
+
+But planning sessions have value. The decision to use a modular monolith, the SQLite
+driver choice, the echo guard fix, the insight that sharing requires the sharer to be
+online — these are the kinds of things that would have been discovered painfully during
+implementation if not reasoned through first.
+
+The next session starts with Phase 2a: restructure the server into its modular layout,
+add SQLite, and implement user registration and login with JWT auth.
+
+> 📝 *Write here: do you normally plan this carefully before coding, or do you usually
+> figure it out as you go? What made you want to think through the full architecture
+> before touching the server?*

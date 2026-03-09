@@ -26,31 +26,70 @@
 | Configurable server address | — | ✅ | ✅ | ✅ | ❌ |
 | Persistent server address | — | ✅ | ✅ | ✅ | ❌ |
 | Server persistence (note.json) | ✅ | — | — | — | — |
-| Multiple notes | ❌ | ❌ | ❌ | ❌ | ❌ |
-| User accounts / auth | ❌ | ❌ | ❌ | ❌ | ❌ |
-| End-to-end encryption | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Multiple notes** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Folders** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 ---
 
 ## Server (Go)
 
-**Status:** POC complete
+**Status:** Phase 1 POC complete (single note, no auth). Deployed on Raspberry Pi. Phase 2 (modular monolith) in design.
 **Location:** `server/`
 **Run:** `cd server && go mod tidy && go run .`
 **Port:** `8080` on all interfaces (`0.0.0.0`)
 
-### What it does
-- WebSocket endpoint at `/ws`
+### Current state (Phase 1)
+- Single WebSocket endpoint at `/ws`, no auth
 - In-memory note + disk persistence to `server/note.json`
 - On new client connect: sends current note as `init` message
 - On `update` from any client: stores if newer (timestamp compare), broadcasts to all others
-- Last-write-wins using Unix millisecond timestamps
+
+### Target structure (Phase 2 — modular monolith)
+
+```
+server/
+├── main.go
+└── internal/
+    ├── config/     ← port, DB path, JWT secret, feature flags
+    ├── db/         ← SQLite (modernc.org/sqlite), migrations
+    ├── auth/       ← POST /auth/register, /auth/login, JWT middleware
+    ├── users/      ← user model, public key storage
+    ├── notes/      ← REST CRUD + per-note WebSocket hub
+    ├── folders/    ← folder CRUD
+    └── hub/        ← WebSocket rooms keyed by note ID
+```
+
+### Database schema (planned)
+
+```sql
+users(id, email, password_hash, public_key, created_at)
+folders(id, owner_id, name, created_at, updated_at)
+notes(id, owner_id, folder_id, title, content, updated_at, created_at)
+note_keys(note_id, user_id, ephemeral_pub, wrapped_key, nonce)
+note_shares(note_id, owner_id, shared_with, can_edit, created_at)
+```
 
 ### Key files
-- `server/main.go` — everything: store, hub, WebSocket handler
+- `server/main.go` — currently everything; will become thin wiring layer
 
-### Dependencies
+### Deployment (Raspberry Pi)
+- Architecture: `aarch64` (64-bit ARM)
+- Build on Mac: `GOOS=linux GOARCH=arm64 go build -o amadeuz-server .`
+- Copy: `scp amadeuz-server pi@<PI_IP>:/opt/amadeuz/amadeuz-server`
+- Binary location: `/opt/amadeuz/amadeuz-server`
+- Managed by systemd: `sudo systemctl restart amadeuz`
+- Logs: `sudo journalctl -u amadeuz -f`
+
+### Dependencies (current)
 - `github.com/gorilla/websocket`
+
+### Dependencies (planned additions)
+- `modernc.org/sqlite` — pure Go SQLite, no CGO
+- `go-chi/chi` — lightweight router with URL parameters
+- `golang-jwt/jwt` — JWT sign/verify
 
 ---
 

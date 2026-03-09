@@ -11,7 +11,9 @@
       "Bash(g++:*)",
       "Bash(git rm:*)",
       "Bash(git add:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(chmod +x:*)",
+      "Bash(bash:*)"
     ]
   }
 }
