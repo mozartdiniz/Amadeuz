@@ -5,7 +5,12 @@
       "Bash(brew list go)",
       "Read(//usr/local/go/bin/**)",
       "Read(//opt/homebrew/bin/**)",
-      "Bash(swift:*)"
+      "Bash(swift:*)",
+      "Bash(mkdir:*)",
+      "Bash(apt list:*)",
+      "Bash(g++:*)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)"
     ]
   }
 }
