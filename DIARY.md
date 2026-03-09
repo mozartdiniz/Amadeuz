@@ -918,3 +918,83 @@ across all four platforms at once.
 > on two different platforms? Did the macOS version make the Windows one easier, or did
 > the different APIs feel like starting from scratch? What was the most surprising
 > difference between the two implementations?*
+
+---
+
+## 2026-03-09 — Linux catches up: multi-folder/multi-notes with GTK4
+
+### What was built
+
+Rewrote the entire Linux GTK4 client from the old single-note architecture to full
+Phase 2b parity with macOS and Windows. The app now has the same three-column layout
+(folder sidebar | note list | note editor), the same wire protocol, the same merge
+logic, and the same offline-first behaviour.
+
+The key new files:
+
+- **`src/models.h`** (new) — `Folder`, `Note`, `WireMessage` structs. The same
+  concepts as `Models.swift` and `Models.cs`, but plain C++ structs.
+- **`src/local_store.h/.cpp`** (rewritten) — now reads/writes `data.json` with both
+  `folders` and `notes` arrays via json-glib. `note.json` is gone.
+- **`src/sync_service.h/.cpp`** (rewritten) — new wire protocol: parses all the
+  `folder_created`, `note_updated`, etc. messages; serializes CRUD requests.
+- **`src/note_view_model.h/.cpp`** (rewritten) — class renamed to `NotesViewModel`;
+  manages `folders_` and `notes_` vectors; handles all message types in
+  `handle_message`; `handle_init` does the per-note last-write-wins merge.
+- **`src/main_window.h/.cpp`** (rewritten) — three `GtkPaned` columns; `GtkListBox`
+  for folders and notes; `GtkStack` switching between "empty" and "editor" pages;
+  right-click context menus via `GtkGestureClick` + `GtkPopover`.
+
+### GTK4-specific decisions
+
+**Layout:** Nested `GtkPaned` (horizontal) gives the three-column split. The folder
+panel is 200 px and non-resizable; the note list is 260 px and non-resizable; the
+editor takes all remaining space. `gtk_paned_set_resize_start_child(FALSE)` locks
+the sidebar widths while keeping the editor flexible.
+
+**Folder sidebar header:** `gtk_list_box_set_header_func` adds a "Folders" section
+label between the "All Notes" row and the first real folder row — no extra widget
+management needed; GTK handles placement automatically.
+
+**Context menus:** GTK4 has no `GtkMenu`. The idiomatic replacement is
+`GtkGestureClick` with `button=3` attached to each row (data stored on the gesture
+object via `g_object_set_data`), which pops up a `GtkPopover` containing plain
+frameless buttons. The popover is unparented in its own `closed` signal to avoid
+a leak.
+
+**List rebuild:** The Windows client uses a diff algorithm to preserve `ListView`
+selection. GTK's `GtkListBox` has no equivalent of `ObservableCollection.Move()`,
+so a full rebuild is used instead: suppress selection signals → remove all rows →
+re-add → restore selection by calling `gtk_list_box_select_row`. Clean and correct
+at this scale.
+
+**Editor stack:** `GtkStack` switches between an "empty" page ("Select a note to
+start editing") and the real editor page (title `GtkEntry` + separator +
+`GtkTextView`). The four `suppress_*` flags stop feedback loops when the code
+updates widgets programmatically.
+
+**GtkGesture cast:** `gtk_widget_add_controller` takes a `GtkEventController*`.
+`GtkGesture` is a subclass but the incomplete-type forward declaration in the header
+blocks an implicit cast — `GTK_EVENT_CONTROLLER(gesture)` is required.
+
+**Deprecated API:** `gtk_css_provider_load_from_data` is gone in recent GTK4;
+replaced with `gtk_css_provider_load_from_string`.
+
+### What was dropped / not needed
+
+The `NoteData` struct from the original `LocalStore` is gone (replaced by the shared
+`models.h` types). The old `note.json` path is no longer written. Users upgrading
+from the single-note build will start with an empty local store on first launch —
+acceptable for a POC.
+
+### Where things stand
+
+Server, macOS, Windows, and Linux are all on Phase 2b: three-column layout, folders,
+multiple notes, offline-first, debounced sync, per-note last-write-wins. The feature
+matrix is now uniform across all three desktop platforms.
+
+Next milestone: Phase 2a — user accounts, JWT auth, per-user data isolation.
+
+> 📝 *Write here: how did the GTK4 implementation compare to writing the same feature
+> in Swift/SwiftUI and C#/WinUI? What was hardest — the C API wrappers, the context
+> menu approach, or keeping the selection state consistent across list rebuilds?*

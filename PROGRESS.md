@@ -26,15 +26,15 @@
 | Configurable server address | — | ✅ | ✅ | ✅ | ❌ |
 | Persistent server address | — | ✅ | ✅ | ✅ | ❌ |
 | Server persistence (data.json) | ✅ | — | — | — | — |
-| Multiple notes | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Folders (create / rename / delete) | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ❌ | ❌ |
-| "All Notes" view | — | ✅ | ✅ | ❌ | ❌ |
-| Default folder bootstrap | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Three-column layout | — | ✅ | ✅ | ❌ | ❌ |
-| Per-note last-write-wins merge | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Create / delete notes (toolbar + context menu) | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Note list with title, date, preview | — | ✅ | ✅ | ❌ | ❌ |
+| Multiple notes | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Folders (create / rename / delete) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| "All Notes" view | — | ✅ | ✅ | ✅ | ❌ |
+| Default folder bootstrap | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Three-column layout | — | ✅ | ✅ | ✅ | ❌ |
+| Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Create / delete notes (toolbar + context menu) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Note list with title, date, preview | — | ✅ | ✅ | ✅ | ❌ |
 | **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -241,13 +241,13 @@ Default server: `ws://localhost:8080/ws`
 
 ## Linux (C++ + GTK4)
 
-**Status:** POC complete
+**Status:** Phase 2b complete — folders + multiple notes, three-column layout
 **Location:** `notes/linux/`
 
 ### Build
 
 ```bash
-# Install dependencies (Ubuntu / Debian)
+# Install dependencies (Ubuntu / Debian) — requires GTK 4.8+
 sudo apt install cmake build-essential libgtk-4-dev libsoup-3.0-dev libjson-glib-dev
 
 # Configure + build
@@ -260,10 +260,22 @@ cmake --build build
 ```
 
 ### What it does
-All POC features. See feature matrix above.
+- Three-column layout: folder sidebar | note list | note editor (via nested `GtkPaned`)
+- Create folders (dialog), rename/delete folders (right-click context menu on folder row)
+- Create notes (toolbar button), delete notes (toolbar button + right-click context menu)
+- Note list sorted by `updated_at` descending, showing title, date, and content preview
+- "All Notes" virtual view shows all notes across all folders
+- Full offline-first: loads `data.json` on startup, works without server
+- Debounce: 500ms after last change to title or content → save locally + push to server
+- Per-note last-write-wins merge on reconnect (push local if ahead)
+- Auto-reconnect every 3 seconds; green/red status dot in `GtkHeaderBar`
+- Settings dialog for server URL (stored in `settings.json`)
 
 ### Local storage
-`~/.local/share/amadeuz/note.json` (XDG_DATA_HOME)
+`~/.local/share/amadeuz/data.json` (XDG_DATA_HOME)
+```json
+{ "folders": [...], "notes": [...] }
+```
 
 ### Settings storage
 `~/.local/share/amadeuz/settings.json` — JSON `{ "serverAddress": "ws://..." }`
@@ -272,7 +284,7 @@ Default server: `ws://localhost:8080/ws`
 ### Dependencies
 | Library | Used for |
 |---------|----------|
-| `gtk4` | Window, text view, widgets |
+| `gtk4` (≥ 4.8) | Window, `GtkPaned`, `GtkListBox`, `GtkHeaderBar`, text view |
 | `libsoup-3.0` | WebSocket client (`SoupWebsocketConnection`) |
 | `json-glib-1.0` | JSON parse/generate |
 
@@ -280,17 +292,22 @@ Default server: `ws://localhost:8080/ws`
 | File | Role |
 |------|------|
 | `src/main.cpp` | `GtkApplication` entry, `on_activate` signal |
-| `src/main_window.h/.cpp` | GTK4 window: `GtkTextView` + separator + status bar + settings dialog |
-| `src/note_view_model.h/.cpp` | State, debounce (`g_timeout_add`), merge logic, settings load/save |
-| `src/local_store.h/.cpp` | Read/write `note.json` via json-glib |
-| `src/sync_service.h/.cpp` | libsoup-3 WebSocket client, auto-reconnect via `g_timeout_add_seconds` |
+| `src/models.h` | `Folder`, `Note`, `WireMessage` structs |
+| `src/main_window.h/.cpp` | GTK4 window: nested `GtkPaned` 3-column layout, all signal handlers |
+| `src/note_view_model.h/.cpp` | `NotesViewModel` — state, selection, debounce, merge, CRUD |
+| `src/local_store.h/.cpp` | Read/write `data.json` (folders + notes) via json-glib |
+| `src/sync_service.h/.cpp` | libsoup-3 WebSocket client, full wire protocol, auto-reconnect |
 
 ### Architecture notes
 - All callbacks (libsoup + GTK) fire on the GLib main thread — no explicit thread marshaling needed
 - Debounce uses `g_timeout_add(500, ...)` / `g_source_remove()` for cancel-and-restart
 - Reconnect uses `g_timeout_add_seconds(3, ...)`
-- `suppress_changed_` flag on `MainWindow` prevents server-received text from re-triggering debounce
-- Settings dialog is a plain `GtkWindow` (modal) — avoids deprecated `GtkDialog`
+- Four `suppress_*` flags on `MainWindow` prevent feedback loops when programmatically updating widgets
+- `GtkListBox` cleared and rebuilt on every folder/note change (simple + correct for this scale)
+- Right-click context menus use `GtkGestureClick` (button=3) + `GtkPopover` attached to the row
+- `GtkStack` switches editor between "empty" page ("Select a note") and "editor" page
+- `gtk_list_box_set_header_func` adds a "Folders" section header in the folder sidebar
+- Selection restore after list rebuild: suppress signals → rebuild → call `gtk_list_box_select_row`
 
 ---
 

@@ -246,9 +246,9 @@ These are developed in order — each phase blocks the next.
 Server restructured as modular monolith (SQLite, `internal/` packages, JWT auth).
 Clients gain login/register UI, JWT stored in platform credential store.
 
-**Phase 2b — Multiple notes + folders**
-Server: `notes` and `folders` tables, CRUD REST, per-note WebSocket hub.
-Client: sidebar with folder tree, note list, note editor (refactored from single-note UI).
+**Phase 2b — Multiple notes + folders** ✅ COMPLETE (server + macOS + Windows + Linux)
+Server: folder + note CRUD over typed WebSocket messages, in-memory store + data.json.
+Client: three-column layout (folder sidebar, note list, note editor) on all three desktop platforms.
 
 **Phase 2c — End-to-end encryption**
 Server stores ciphertext only. Clients generate X25519 keypairs, encrypt notes with
@@ -304,3 +304,7 @@ HTTPS/WSS, dynamic DNS or relay service, proper packaging (`.app`, `.msix`, `.de
 | `INotifyPropertyChanged` on `Note` (Windows) | In-place property updates (`Title`, `Content`, `UpdatedAt`) via `INotifyPropertyChanged` refresh the ListView row without removing and re-inserting the item. Same motivation as the ObservableCollection diff: selection is never disturbed. |
 | Callbacks injected into `NotesViewModel` (Windows) | WinUI 3 data binding works for the folder/note `ObservableCollection`s. The editor requires synchronous, ordered updates tied to flush-on-switch logic, which two-way binding would fight. Explicit callbacks (`onEditorChanged`, `onConnectionChanged`, `onNoteAutoSelected`) injected at construction make the data flow clear and avoid binding surprises. |
 | `FolderItem` sentinel for "All Notes" (Windows) | A single `ListView` needs to show both "All Notes" and real folders. A flat `FolderItem` class with a fixed sentinel ID (`"__all__"`) lets XAML treat all rows uniformly while the view model uses the sentinel to decide filter vs show-all. The sentinel's `IsAllNotes` property lets DataTemplates hide rename/delete controls. |
+| Full rebuild vs diff for Linux `GtkListBox` | GTK4's `GtkListBox` has no equivalent of `ObservableCollection.Move()`. Rather than implement a manual diff with `gtk_list_box_remove`/`gtk_list_box_insert` that replicates the Windows logic in C, the simpler approach is: suppress selection signals → remove all rows → re-add → call `gtk_list_box_select_row` to restore. Selection loss during rebuild is invisible to the user because signals are suppressed throughout. Correct and easy to reason about at this scale. |
+| `GtkGestureClick` + `GtkPopover` for context menus (Linux) | GTK4 removed `GtkMenu`. The replacement for right-click menus is `GtkGestureClick` (button=3) attached to each row, with data stored on the gesture via `g_object_set_data`. On press, a `GtkPopover` with frameless buttons is created, parented to the row, and shown. Unparented in `GtkPopover::closed` to avoid leaks. |
+| `GtkStack` for editor empty/active state (Linux) | When no note is selected, a "Select a note" placeholder should be shown instead of the editor. `GtkStack` with named pages ("empty" / "editor") is the idiomatic GTK4 approach — cleaner than showing/hiding individual widgets. |
+| `GTK_EVENT_CONTROLLER()` cast required (Linux) | `GtkGesture` is a subclass of `GtkEventController`, but the incomplete-type forward declaration in the GTK4 headers prevents an implicit conversion. `GTK_EVENT_CONTROLLER(gesture)` macro is required when calling `gtk_widget_add_controller`. |
