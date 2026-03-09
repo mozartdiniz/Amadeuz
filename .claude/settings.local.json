@@ -10,7 +10,8 @@
       "Bash(apt list:*)",
       "Bash(g++:*)",
       "Bash(git rm:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(ls:*)"
     ]
   }
 }

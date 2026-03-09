@@ -173,3 +173,69 @@ Defer until desktop POC is validated.
 - [ ] End-to-end encryption
 - [ ] File sync (the broader iCloud replacement scope)
 - [ ] Server deployment beyond LAN (DNS, HTTPS/WSS, dynamic IP handling)
+
+---
+
+## Living Documents — Rules for Claude
+
+Three markdown files must be kept up to date **automatically**, without being asked.
+Update them at the end of every session in which anything relevant happened.
+
+---
+
+### VISION.md
+
+**Purpose:** Strategic and architectural reference. Decision-level document.
+Used as a guide when evaluating technical choices — "does this align with the vision?"
+
+**What belongs here:**
+- The end-goal of the project and core principles (native-everywhere, offline-first, self-hosted, etc.)
+- Architecture diagrams and wire protocol specification
+- Platform and technology decisions with rationale
+- Roadmap phases
+- The decisions log — *every* non-trivial technical choice and *why* it was made
+
+**Rules:**
+- Update whenever a technology, architecture, or design decision is made or changed
+- Update the decisions log immediately when a decision is made — while the reasoning is fresh
+- This file must remain consistent with what is actually implemented; never let it drift
+- Tone: polished, reference-quality. This is the document a new contributor reads to understand the project
+
+---
+
+### PROGRESS.md
+
+**Purpose:** Practical state tracker for cross-platform work. Machine-readable by Claude.
+
+**What belongs here:**
+- The feature matrix table (features vs platforms, ✅ / ❌)
+- Per-platform status, build instructions, file structure, key files, and quirks
+- Enough context that opening a new AI session with "read PROGRESS.md, I'm working on [platform]"
+  is sufficient to resume work without any further explanation
+
+**Rules:**
+- Update the feature matrix immediately when a feature is completed on any platform
+- Update a platform's section whenever its status, files, build steps, or known issues change
+- Mark a platform "POC complete" only when all POC features in the matrix are ✅
+- This file is the source of truth for "what is done and where"
+
+---
+
+### DIARY.md
+
+**Purpose:** Raw build journal. Source material for blog posts.
+
+**What belongs here:**
+- Every significant session: what was built, what decisions were made, what problems were hit
+- The *reasoning* behind technical choices, written while it's still fresh
+- `> 📝` blockquotes as prompts for the human author to fill in personal reflections
+- Honest accounts of mistakes, surprises, and pivots — these make for good writing
+- A "where things stand" summary at the end of each day or milestone
+
+**Rules:**
+- Add a new dated entry at the end of every session that made meaningful progress
+- Write in the established voice: plain technical prose, no marketing language, no oversimplification
+- Do not rewrite or clean up past entries — append only
+- Leave `> 📝` prompts wherever the human's personal perspective would strengthen the eventual blog post
+- The audience for the final blog posts is developers of all levels, including beginners
+  Keep explanations honest and accessible without being condescending
