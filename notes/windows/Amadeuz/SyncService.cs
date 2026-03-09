@@ -10,18 +10,24 @@ namespace Amadeuz;
 
 /// <summary>
 /// WebSocket client for the amadeuz sync server.
+/// Delivers typed WsMessage objects; accepts typed WsMessage objects for sending.
 /// Automatically reconnects every 3 seconds on disconnect.
-/// All callbacks are invoked from background threads.
+/// All callbacks fire on background threads — callers must marshal to the UI thread.
 /// </summary>
 public sealed class SyncService : IDisposable
 {
-    private readonly string                _url;
-    private readonly Action<string, long>  _onMessage;
-    private readonly Action<bool>          _onConnection;
+    private readonly string                  _url;
+    private readonly Action<WsMessage>       _onMessage;
+    private readonly Action<bool>            _onConnection;
     private readonly CancellationTokenSource _cts = new();
-    private ClientWebSocket?               _socket;
+    private ClientWebSocket?                 _socket;
 
-    public SyncService(string url, Action<string, long> onMessage, Action<bool> onConnection)
+    private static readonly JsonSerializerOptions _json = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    public SyncService(string url, Action<WsMessage> onMessage, Action<bool> onConnection)
     {
         _url          = url;
         _onMessage    = onMessage;
@@ -71,22 +77,20 @@ public sealed class SyncService : IDisposable
 
             try
             {
-                var msg = JsonSerializer.Deserialize<WsMessage>(sb.ToString());
-                if (msg is not null)
-                    _onMessage(msg.Content, msg.UpdatedAt);
+                var msg = JsonSerializer.Deserialize<WsMessage>(sb.ToString(), _json);
+                if (msg is not null) _onMessage(msg);
             }
             catch { }
         }
     }
 
-    public async Task SendAsync(string content, long updatedAt)
+    public async Task SendAsync(WsMessage msg)
     {
         var socket = _socket;
         if (socket?.State != WebSocketState.Open) return;
         try
         {
-            var json  = JsonSerializer.Serialize(new WsMessage("update", content, updatedAt));
-            var bytes = Encoding.UTF8.GetBytes(json);
+            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(msg, _json));
             await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
         }
         catch { }
@@ -97,10 +101,4 @@ public sealed class SyncService : IDisposable
         _cts.Cancel();
         _cts.Dispose();
     }
-
-    // Wire format — matches the Go server protocol exactly.
-    private record WsMessage(
-        [property: JsonPropertyName("type")]       string Type,
-        [property: JsonPropertyName("content")]    string Content,
-        [property: JsonPropertyName("updated_at")] long   UpdatedAt);
 }

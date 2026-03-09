@@ -26,15 +26,15 @@
 | Configurable server address | — | ✅ | ✅ | ✅ | ❌ |
 | Persistent server address | — | ✅ | ✅ | ✅ | ❌ |
 | Server persistence (data.json) | ✅ | — | — | — | — |
-| Multiple notes | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Folders (create / rename / delete) | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Cascade delete (folder → notes) | ✅ | ✅ | ❌ | ❌ | ❌ |
-| "All Notes" view | — | ✅ | ❌ | ❌ | ❌ |
-| Default folder bootstrap | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Three-column layout | — | ✅ | ❌ | ❌ | ❌ |
-| Per-note last-write-wins merge | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Create / delete notes (toolbar + context menu) | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Note list with title, date, preview | — | ✅ | ❌ | ❌ | ❌ |
+| Multiple notes | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Folders (create / rename / delete) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| "All Notes" view | — | ✅ | ✅ | ❌ | ❌ |
+| Default folder bootstrap | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Three-column layout | — | ✅ | ✅ | ❌ | ❌ |
+| Per-note last-write-wins merge | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Create / delete notes (toolbar + context menu) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Note list with title, date, preview | — | ✅ | ✅ | ❌ | ❌ |
 | **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -171,7 +171,7 @@ Default server: `ws://localhost:8080/ws`
 
 ## Windows (C# + WinUI 3)
 
-**Status:** POC complete
+**Status:** Phase 2b complete — folders + multiple notes, three-column layout
 **Location:** `notes/windows/`
 **Build (dev):** Open `Amadeuz.sln` in Visual Studio 2022, press F5
 **Requires:** Visual Studio 2022 + Windows App SDK workload, Windows 11
@@ -201,10 +201,21 @@ the app shows a dialog offering to install it automatically.
 - Custom target `CopyPriFilesToPublish` — copies `*.pri` resource files to publish output (required for XAML)
 
 ### What it does
-All POC features. See feature matrix above.
+- Three-column layout: folder sidebar | note list | note editor
+- Create/rename/delete folders (context menu on right-click)
+- Create/delete notes (toolbar buttons + right-click context menu)
+- Note list sorted by `updatedAt` descending, with title, date, and content preview
+- Full offline-first: loads `data.json` on startup, works without server
+- Debounce: 500ms after last change to title or content → save locally + push to server
+- Per-note last-write-wins merge on reconnect (push local if ahead)
+- Auto-reconnect every 3 seconds; green/red status dot in status bar
+- "All Notes" virtual folder shows all notes across all folders
 
 ### Local storage
-`%APPDATA%\amadeuz\note.json`
+`%APPDATA%\amadeuz\data.json`
+```json
+{ "folders": [...], "notes": [...] }
+```
 
 ### Settings storage
 `%APPDATA%\amadeuz\settings.json` — JSON `{ "serverAddress": "ws://..." }`
@@ -213,16 +224,18 @@ Default server: `ws://localhost:8080/ws`
 ### Key files
 | File | Role |
 |------|------|
-| `MainWindow.xaml` | WinUI layout: `TextBox` + status bar (dot + label + Settings button) |
-| `MainWindow.xaml.cs` | Event wiring; `_suppressTextChanged` flag prevents echo loop |
-| `NoteViewModel.cs` | State, debounce (`CancellationTokenSource` + `Task.Delay`), merge logic |
-| `LocalStore.cs` | Read/write `note.json` via `System.Text.Json` |
-| `SyncService.cs` | `ClientWebSocket` wrapper, connect loop, auto-reconnect |
+| `MainWindow.xaml` | Three-column Grid layout; DataTemplates for folder/note lists |
+| `MainWindow.xaml.cs` | Event wiring; `_suppressEditorChanged` flag; dialog helpers |
+| `NotesViewModel.cs` | State, debounce (`CancellationTokenSource` + `Task.Delay`), sync, CRUD |
+| `Models.cs` | `Folder`, `Note`, `FolderItem`, `WsMessage` types |
+| `LocalStore.cs` | Read/write `data.json` (folders + notes) via `System.Text.Json` |
+| `SyncService.cs` | `ClientWebSocket` wrapper, typed `WsMessage` delivery, auto-reconnect |
 
 ### Visual notes
 - Uses Mica backdrop (`SystemBackdrop = new MicaBackdrop()`) for native Windows 11 look
 - Status dot is a WinUI `Ellipse` with `Fill` changed in code-behind
-- Settings dialog is a `ContentDialog` built entirely in code (no XAML)
+- All dialogs (Settings, New Folder, Rename) are `ContentDialog` built in code (no XAML)
+- `FolderItem` sentinel class unifies "All Notes" + real folders into one ListView
 
 ---
 

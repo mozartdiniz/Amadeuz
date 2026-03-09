@@ -1,50 +1,55 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Amadeuz;
 
-public record NoteData
-{
-    [JsonPropertyName("content")]  public string Content   { get; init; } = "";
-    [JsonPropertyName("updatedAt")] public long  UpdatedAt { get; init; }
-
-    public static NoteData Empty => new();
-}
-
 /// <summary>
-/// Persists note content to the app's local data folder as note.json.
-/// Same JSON schema as the macOS client.
+/// Persists folders and notes to %APPDATA%\amadeuz\data.json.
+/// Same JSON schema as the macOS and server.
+/// Writes are atomic (temp file + rename) so a crash mid-write can't corrupt the file.
 /// </summary>
-public class LocalStore
+public sealed class LocalStore
 {
     private readonly string _filePath;
 
     public LocalStore()
     {
-        // %APPDATA%\amadeuz\note.json  — matches the spec and survives reinstalls.
-        var folder = Path.Combine(
+        var dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "amadeuz");
-        Directory.CreateDirectory(folder);
-        _filePath = Path.Combine(folder, "note.json");
+        Directory.CreateDirectory(dir);
+        _filePath = Path.Combine(dir, "data.json");
     }
 
-    public NoteData Load()
+    public (List<Folder> folders, List<Note> notes) Load()
     {
         try
         {
-            if (!File.Exists(_filePath)) return NoteData.Empty;
-            var json = File.ReadAllText(_filePath);
-            return JsonSerializer.Deserialize<NoteData>(json) ?? NoteData.Empty;
+            if (!File.Exists(_filePath)) return (new(), new());
+            var doc = JsonSerializer.Deserialize<LocalData>(File.ReadAllText(_filePath));
+            return (doc?.Folders ?? new(), doc?.Notes ?? new());
         }
-        catch { return NoteData.Empty; }
+        catch { return (new(), new()); }
     }
 
-    public void Save(string content, long updatedAt)
+    public void Save(IEnumerable<Folder> folders, IEnumerable<Note> notes)
     {
-        try { File.WriteAllText(_filePath, JsonSerializer.Serialize(new NoteData { Content = content, UpdatedAt = updatedAt })); }
+        try
+        {
+            var tmp = _filePath + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(
+                new LocalData { Folders = new(folders), Notes = new(notes) }));
+            File.Move(tmp, _filePath, overwrite: true);
+        }
         catch { }
+    }
+
+    private sealed class LocalData
+    {
+        [JsonPropertyName("folders")] public List<Folder> Folders { get; init; } = new();
+        [JsonPropertyName("notes")]   public List<Note>   Notes   { get; init; } = new();
     }
 }

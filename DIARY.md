@@ -817,3 +817,104 @@ The next logical steps:
 1. Bring Windows and Linux to feature parity (folders + multiple notes UI)
 2. Then add auth across all clients at once — rather than adding auth to macOS first and
    having to update Windows and Linux twice
+
+---
+
+## March 9, 2026 (continued) — The Windows client catches up
+
+### What had to change
+
+The macOS rewrite was the template. The Windows client needed to do the same thing:
+go from a single `TextBox` to a three-column layout with folders, a note list, and a
+note editor. The scope of change is roughly the same.
+
+The single-note Windows app was four files. The new one is six:
+
+- `Models.cs` — `Folder`, `Note`, `FolderItem`, `WsMessage` (replacing the old single-note types)
+- `NotesViewModel.cs` — all business logic (replacing the old `NoteViewModel.cs`)
+- `LocalStore.cs` — now reads/writes `data.json` with `folders` and `notes` arrays
+- `SyncService.cs` — now delivers typed `WsMessage` objects covering all twelve message types
+- `MainWindow.xaml` — three-column Grid layout with DataTemplates for the two ListViews
+- `MainWindow.xaml.cs` — event wiring, `_suppressEditorChanged` flag, dialog helpers
+
+The old `NoteViewModel.cs` was deleted. `NotesViewModel.cs` is its replacement.
+
+### The ObservableCollection diff
+
+This was the most interesting Windows-specific problem.
+
+WinUI 3's `ListView` works well with `ObservableCollection<T>`. The naive approach —
+clear the collection and repopulate it on every folder switch or sync message — is
+correct but destructive: clearing the collection clears the selection, which fires
+`SelectionChanged`, which calls `NoteSelectionChanged`, which wipes the editor. The user
+clicks a folder and their current note vanishes.
+
+The fix: never clear `FilteredNotes`. Instead, maintain it via a diff algorithm:
+
+1. Compute the target list (notes for the selected folder, sorted by `updatedAt` descending)
+2. Pass 1: remove items from `FilteredNotes` that are not in the target
+3. Pass 2: for each item in the target, either insert it (if new) or `Move()` it to
+   the correct position (if already present but out of order)
+
+`ObservableCollection.Move()` fires `NotifyCollectionChangedAction.Move` — the ListView
+reorders the row without touching selection. The selected note stays selected through
+folder switches, syncs, and new note arrivals. No editor flicker.
+
+The same principle applies to `Note` itself. `Note` implements `INotifyPropertyChanged`.
+When a `note_updated` arrives, we find the existing `Note` object and set its properties
+in-place. The ListView row refreshes without the item being removed and re-inserted.
+Selection is preserved throughout.
+
+### The flush-on-switch problem
+
+Same problem as macOS, different API.
+
+When the user clicks a different note, the editor must save the current note immediately —
+not wait 500ms. The `ListView.SelectionChanged` event fires on the UI thread and has
+access to the current `TextBox` values. The code-behind passes them to
+`NoteSelectionChanged(oldId, newId, title, content)`. The view model cancels the pending
+`CancellationTokenSource`, flushes the old note synchronously (save + send), then loads
+the new note's content back into the editor.
+
+The `_suppressEditorChanged` flag handles a follow-on issue: when the editor TextBoxes
+are updated programmatically (loading a note), that fires `TextChanged`, which would
+start a new debounce for content that came from the model and does not need to go back.
+The flag is set before the programmatic update and cleared immediately after.
+
+### The callbacks architecture
+
+The macOS view model uses `@Published` properties that SwiftUI observes automatically.
+WinUI 3 has data binding too, but the editor's two-way interaction with the flush-on-switch
+logic made explicit callbacks cleaner. Three callbacks are injected into the view model
+constructor:
+
+- `onEditorChanged(title, content)` — update the editor TextBoxes
+- `onConnectionChanged(bool)` — update the status dot colour
+- `onNoteAutoSelected(id, title, content)` — select a newly-created note in the ListView
+
+Data flow is explicit: view model calls a callback, code-behind updates the UI. The
+`ObservableCollection`s are bound directly in XAML for the folder and note lists — that
+part uses standard binding. The editor is handled via callbacks because it needs
+synchronous, ordered updates that interact with flush logic.
+
+### The "All Notes" sentinel
+
+Folders and "All Notes" need to coexist in one `ListView`. The solution is a flat
+`FolderItem` class used for both. "All Notes" gets a fixed sentinel ID (`"__all__"`).
+`FolderItem.IsAllNotes` returns `true` for this sentinel, and the XAML DataTemplate uses
+it to conditionally hide the rename/delete buttons. The view model uses the same ID to
+decide whether to show all notes or filter to one folder.
+
+### Where things stand
+
+Server, macOS, and Windows are all on the Phase 2b protocol: three-column layout,
+folders, multiple notes, offline-first, debounced sync, per-note last-write-wins.
+
+Linux is still on the old single-note protocol and will need the same treatment.
+After Linux reaches parity, the next milestone is Phase 2a: user accounts and auth
+across all four platforms at once.
+
+> 📝 *Write here: what was the experience of implementing the same feature back to back
+> on two different platforms? Did the macOS version make the Windows one easier, or did
+> the different APIs feel like starting from scratch? What was the most surprising
+> difference between the two implementations?*
