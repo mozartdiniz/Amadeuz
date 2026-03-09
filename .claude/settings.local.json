@@ -22,7 +22,10 @@
       "Bash(dotnet:*)",
       "Bash(taskkill:*)",
       "Bash(cmd:*)",
-      "Bash(dotnet restore:*)"
+      "Bash(dotnet restore:*)",
+      "Bash(lsof:*)",
+      "Bash(go test:*)",
+      "Bash(go build:*)"
     ]
   }
 }

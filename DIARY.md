@@ -350,6 +350,125 @@ What is missing before calling this a real POC:
 
 ---
 
+## March 9, 2026 (night) — Folders, multiple notes, and the first real tests
+
+### Skipping Phase 2a
+
+The architecture doc said to implement user accounts first. We skipped it and went straight
+to multiple notes and folders.
+
+The reason is practical: building auth before the core data model is validated means building
+auth for a schema that might change. Notes and folders are the product. Auth is plumbing.
+Get the data model working end-to-end first, then layer auth on top. A working notes app
+without logins is more useful to test than a login screen with nowhere to go.
+
+> 📝 *Write here: does it feel weird to deviate from the plan you wrote a few hours ago?
+> Is that flexibility or indiscipline? How do you tell the difference?*
+
+### What the UI reference told us about the data model
+
+The starting point was a screenshot of Apple Notes. Three columns: folder list on the left,
+note list in the middle, note content on the right.
+
+This immediately told us what data we needed:
+
+- `Folder`: `id`, `name`, `created_at`
+- `Note`: `id`, `folder_id`, `title`, `content`, `updated_at`, `created_at`
+
+And what operations the server needs to support: create/rename/delete folder, create/update/delete
+note, cascade delete notes when a folder is deleted. The screenshot was a better spec than
+a written requirements list would have been.
+
+### Rewriting the server
+
+The original server was 155 lines in a single `main.go`. It handled one thing: a single
+shared note. The new server is split into four files:
+
+- `model.go` — data types and the wire message format
+- `store.go` — all in-memory state and disk persistence, with a clear interface
+- `hub.go` — WebSocket hub and message routing
+- `main.go` — HTTP setup only
+
+The separation matters. `store.go` has no WebSocket dependency. It can be tested with plain
+Go tests, no network required. `hub.go` has no persistence logic — it just calls the store
+and broadcasts results. Each file has one job.
+
+### The wire protocol grew up
+
+The original protocol had two message types: `init` and `update`. The new protocol has twelve.
+Every mutation (create, rename, delete for folders; create, update, delete for notes) has its
+own message type. This is more code but it eliminates ambiguity — the type field tells you
+exactly what happened without having to infer it from payload structure.
+
+One subtlety about `create_*` vs `update_*` and `delete_*`: create responses are sent to
+the originating client *and* broadcast to others. The reason is that the client needs the
+server-assigned ID. You send `create_note` with a title; the server responds with
+`note_created` containing the new UUID. Without that round-trip, the client cannot reference
+the note for future updates.
+
+Update and delete are the opposite: the originating client already knows what changed (it
+initiated the change), so the broadcast goes only to other clients. The server acts as a
+relay, not an acknowledgement system, for those operations.
+
+### The persist() race condition
+
+The original code called `go s.persist()` — a goroutine — every time the store changed.
+Simple and apparently correct. It is actually a race condition.
+
+Consider two goroutines: goroutine A was spawned after a `createFolder` call, goroutine B
+after a subsequent `createNote` call. Both take a snapshot of the store's current state,
+then write to disk. If goroutine A runs *after* goroutine B, it overwrites the file with
+an older snapshot that doesn't include the note. The client will reconnect and find a folder
+with no notes in it.
+
+The fix has two parts:
+1. Synchronous persist — no goroutines. The mutation waits for the write to finish.
+2. Atomic write — write to a temp file, then `os.Rename`. Rename is atomic on POSIX
+   filesystems. If the process is killed mid-write, the original file is intact.
+
+For a notes app, synchronous writes are fine. A debounced keystroke happens at most twice
+a second; a local file write takes microseconds. The complexity of goroutine coordination
+is not worth the negligible performance difference.
+
+### The tests
+
+20 unit tests for `store.go`. They cover:
+
+- Creating, renaming, and deleting folders — including not-found cases
+- Cascade delete: removing a folder deletes its notes but not notes in other folders
+- Creating notes in valid and invalid folders
+- The last-write-wins logic: updates with older or equal timestamps are rejected
+- Persist and reload: write state, create a new store from the same file, verify everything survived
+- Atomic write format: the file on disk is valid JSON with the right structure
+- ID uniqueness: two notes created in the same folder get different IDs
+
+The `TestPersistAndReload` test caught the race condition described above — it was failing
+because async goroutines were overwriting the file after the synchronous `persist()` call
+in the test, leaving the file truncated or empty on reload. Making persist synchronous made
+the test deterministic.
+
+Tests running against the store in isolation, with no WebSocket machinery involved, meant
+the feedback loop was fast. Change something in `store.go`, run `go test ./...`, see results
+in under a second. This is what separates testable code from code you have to run end-to-end
+to verify.
+
+> 📝 *Write here: do you normally write tests for side projects like this? Does the
+> presence of tests change how you feel about the code — more confident, more constrained,
+> or both?*
+
+### Where things stand
+
+The server now supports folders and multiple notes. The wire protocol is documented.
+The store is tested. The clients (macOS, Windows, Linux) are still on the old single-note
+protocol — they will fail to compile against the new one. That is intentional: the server
+moves first, then each client is updated to match.
+
+Next session: update the macOS client. The UI changes from a single `TextEditor` to a
+three-column layout: folders, note list, note editor. The view models split accordingly.
+The sync logic changes from "sync one note" to "sync a collection."
+
+---
+
 ## March 9, 2026 (late) — Getting the Windows app to run outside Visual Studio
 
 ### The problem with "just double-click it"
@@ -593,3 +712,108 @@ add SQLite, and implement user registration and login with JWT auth.
 > 📝 *Write here: do you normally plan this carefully before coding, or do you usually
 > figure it out as you go? What made you want to think through the full architecture
 > before touching the server?*
+
+---
+
+## March 9, 2026 (night, continued) — The macOS client, rewritten
+
+### From one note to many: what had to change
+
+The old macOS client was five files, ~350 lines total. The new one is six files and about
+550 lines. It is not dramatically larger, but almost every line changed.
+
+The old `NoteViewModel` managed one note. The new `NotesViewModel` manages a collection of
+folders and notes, which note is selected, which note is in the editor, and how to flush
+unsaved changes when the user switches away.
+
+The old `LocalStore` read and wrote a single `note.json`. The new one reads and writes
+`data.json` — an object with a `folders` array and a `notes` array, same format as the
+server's persistence file.
+
+The old `SyncService` called back with `(content: String, updatedAt: Int64)`. The new one
+calls back with a `WSMsg` — a tagged union covering all twelve message types. The view model
+switches on the type and handles each one.
+
+### The three-column layout
+
+SwiftUI's `NavigationSplitView` on macOS gives you the three-column layout from Apple Notes
+for free. It handles the sidebar toggle, the column dividers, the minimum/maximum widths.
+The only work is populating each column:
+
+```
+NavigationSplitView {
+    // Left: folder list
+} content: {
+    // Middle: notes in selected folder
+} detail: {
+    // Right: title field + text editor
+}
+```
+
+The selection is driven by `List(vm.folders, selection: $vm.selectedFolderID)`. SwiftUI
+highlights the selected row and binds the selection to the view model automatically. Same
+for the note list. No custom selection tracking needed.
+
+### The flush-on-switch problem
+
+The trickiest part was making sure edits are saved when the user switches notes without
+waiting for the 500ms debounce.
+
+The sequence:
+1. User is typing in note A (debounce running, 500ms from last keystroke)
+2. User clicks note B in the list
+3. Note B's content should appear immediately
+4. Note A's changes should be saved right now, not 500ms later
+
+The solution: the note list's `.onChange(of: vm.selectedNoteID)` calls
+`vm.noteSelectionChanged(from: oldID, to: newID)`. This method flushes the old note
+synchronously (calls `flushNote(id: oldID, ...)` which saves locally and sends to server),
+then loads the new note into the editor.
+
+The debounce still fires 500ms later. But by then, the editor shows note B's content,
+and `editingNoteID` is B. If nothing has been typed, `flushNote` detects no change and
+does nothing. No duplicate saves, no state corruption.
+
+### CombineLatest for the debounce
+
+The old debounce observed `$content` (a single `String`). The new one has two fields:
+`editingTitle` and `editingContent`. Instead of two separate debounces, one combined one:
+
+```swift
+Publishers.CombineLatest($editingTitle, $editingContent)
+    .dropFirst()
+    .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+    .sink { [weak self] title, content in
+        guard let self, let noteID = self.editingNoteID else { return }
+        self.flushNote(id: noteID, title: title, content: content)
+    }
+```
+
+This fires once, 500ms after the last change to either field. A single network message
+covers both title and content.
+
+### WSMsg encoding: omitting nil fields
+
+Swift's `JSONEncoder` encodes `nil` optionals as `null` by default. Sending
+`"folder_id": null` in an `update_note` message is wrong — the field should not be there
+at all. The fix: a custom `encode(to:)` using `encodeIfPresent` for every optional field.
+The decode side uses `decodeIfPresent` symmetrically.
+
+### Build: 1.7 seconds
+
+`swift build` completed in 1.7 seconds. No warnings. The old single-note client compiled
+in about the same time — a useful check that we haven't added unnecessary complexity.
+
+> 📝 *Write here: what was it like rewriting an app you built two days ago? Did it feel
+> like throwing away work, or like the first version doing its job (proving the idea so
+> you could build it properly)? Was the rewrite faster or slower than the original build?*
+
+### Where things stand
+
+Server and macOS are in sync on the new protocol. Windows and Linux are still on the old
+single-note protocol — they will need updating in a future session.
+
+The next logical steps:
+1. Bring Windows and Linux to feature parity (folders + multiple notes UI)
+2. Then add auth across all clients at once — rather than adding auth to macOS first and
+   having to update Windows and Linux twice

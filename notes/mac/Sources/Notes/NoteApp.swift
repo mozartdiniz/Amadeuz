@@ -9,7 +9,7 @@ struct NoteApp: App {
         WindowGroup("Notes") {
             ContentView()
         }
-        .defaultSize(width: 700, height: 500)
+        .defaultSize(width: 1000, height: 680)
     }
 }
 

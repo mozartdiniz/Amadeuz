@@ -25,10 +25,17 @@
 | Connection status indicator | — | ✅ | ✅ | ✅ | ❌ |
 | Configurable server address | — | ✅ | ✅ | ✅ | ❌ |
 | Persistent server address | — | ✅ | ✅ | ✅ | ❌ |
-| Server persistence (note.json) | ✅ | — | — | — | — |
+| Server persistence (data.json) | ✅ | — | — | — | — |
+| Multiple notes | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Folders (create / rename / delete) | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Cascade delete (folder → notes) | ✅ | ✅ | ❌ | ❌ | ❌ |
+| "All Notes" view | — | ✅ | ❌ | ❌ | ❌ |
+| Default folder bootstrap | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Three-column layout | — | ✅ | ❌ | ❌ | ❌ |
+| Per-note last-write-wins merge | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Create / delete notes (toolbar + context menu) | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Note list with title, date, preview | — | ✅ | ❌ | ❌ | ❌ |
 | **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Multiple notes** | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Folders** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ |
 
@@ -36,44 +43,63 @@
 
 ## Server (Go)
 
-**Status:** Phase 1 POC complete (single note, no auth). Deployed on Raspberry Pi. Phase 2 (modular monolith) in design.
+**Status:** Phase 2b in progress — multiple notes + folders implemented, no auth yet.
 **Location:** `server/`
 **Run:** `cd server && go mod tidy && go run .`
-**Port:** `8080` on all interfaces (`0.0.0.0`)
+**Port:** `8080` on all interfaces (`0.0.0.0`)**Tests:** `cd server && go test ./...` (20 unit tests, all passing)
 
-### Current state (Phase 1)
+### Current state (Phase 2b)
 - Single WebSocket endpoint at `/ws`, no auth
-- In-memory note + disk persistence to `server/note.json`
-- On new client connect: sends current note as `init` message
-- On `update` from any client: stores if newer (timestamp compare), broadcasts to all others
+- Full folder + note CRUD over WebSocket messages (see wire protocol below)
+- In-memory store + atomic disk persistence to `server/data.json`
+- On new client connect: sends `init` with all folders and all notes (including content)
+- Last-write-wins per note (timestamp compare), cascade delete when folder is deleted
 
-### Target structure (Phase 2 — modular monolith)
+### Wire protocol (current)
 
+**Client → Server:**
+```json
+{ "type": "create_folder", "name": "Work" }
+{ "type": "rename_folder", "folder_id": "...", "name": "Work Projects" }
+{ "type": "delete_folder", "folder_id": "..." }
+{ "type": "create_note",   "folder_id": "...", "title": "My Note" }
+{ "type": "update_note",   "note_id": "...", "title": "...", "content": "...", "updated_at": 123456 }
+{ "type": "delete_note",   "note_id": "..." }
+```
+
+**Server → Client (on connect):**
+```json
+{ "type": "init", "folders": [...], "notes": [...] }
+```
+
+**Server → Client (broadcasts after mutations):**
+```json
+{ "type": "folder_created", "folder": { "id": "...", "name": "...", "created_at": 123 } }
+{ "type": "folder_renamed", "folder": { "id": "...", "name": "...", "created_at": 123 } }
+{ "type": "folder_deleted", "folder_id": "..." }
+{ "type": "note_created",   "note": { "id": "...", "folder_id": "...", "title": "...", ... } }
+{ "type": "note_updated",   "note": { "id": "...", "folder_id": "...", "title": "...", ... } }
+{ "type": "note_deleted",   "note_id": "..." }
+```
+
+Create responses are sent to originating client **and** broadcast to others (client needs the server-assigned ID).
+Update/delete responses are broadcast to others only (sender already updated locally).
+
+### File layout
 ```
 server/
-├── main.go
-└── internal/
-    ├── config/     ← port, DB path, JWT secret, feature flags
-    ├── db/         ← SQLite (modernc.org/sqlite), migrations
-    ├── auth/       ← POST /auth/register, /auth/login, JWT middleware
-    ├── users/      ← user model, public key storage
-    ├── notes/      ← REST CRUD + per-note WebSocket hub
-    ├── folders/    ← folder CRUD
-    └── hub/        ← WebSocket rooms keyed by note ID
+├── main.go        ← HTTP setup + WebSocket upgrade loop
+├── model.go       ← Folder, Note, Msg types
+├── store.go       ← in-memory store + atomic JSON persistence
+├── hub.go         ← WebSocket hub + message dispatch
+└── store_test.go  ← 20 unit tests
 ```
 
-### Database schema (planned)
-
-```sql
-users(id, email, password_hash, public_key, created_at)
-folders(id, owner_id, name, created_at, updated_at)
-notes(id, owner_id, folder_id, title, content, updated_at, created_at)
-note_keys(note_id, user_id, ephemeral_pub, wrapped_key, nonce)
-note_shares(note_id, owner_id, shared_with, can_edit, created_at)
-```
-
-### Key files
-- `server/main.go` — currently everything; will become thin wiring layer
+### Persistence
+- File: `server/data.json`
+- Format: `{ "folders": [...], "notes": [...] }`
+- Writes are atomic (write to temp file, then `os.Rename`) — no partial-write corruption
+- Writes are synchronous per mutation (fast enough; avoids race conditions from async goroutines)
 
 ### Deployment (Raspberry Pi)
 - Architecture: `aarch64` (64-bit ARM)
@@ -95,16 +121,26 @@ note_shares(note_id, owner_id, shared_with, can_edit, created_at)
 
 ## macOS (Swift + SwiftUI)
 
-**Status:** POC complete
+**Status:** Phase 2b complete — folders + multiple notes, three-column layout
 **Location:** `notes/mac/`
 **Run:** `cd notes/mac && swift run`
 **Requires:** Xcode command-line tools + accepted license (`sudo xcodebuild -license`)
 
 ### What it does
-All POC features. See feature matrix above.
+- Three-column `NavigationSplitView`: folder list | note list | note editor
+- Create/rename/delete folders (context menu on folder rows)
+- Create/delete notes (toolbar button + context menu)
+- Note list sorted by `updatedAt` descending, with title, date, and content preview
+- Full offline-first: loads `data.json` on startup, works without server
+- Debounce: 500ms after last change to title or content → save locally + push to server
+- Per-note last-write-wins merge on reconnect (push local if ahead)
+- Auto-reconnect every 3 seconds; green/red status dot in toolbar
 
 ### Local storage
-`~/Library/Application Support/amadeuz/note.json`
+`~/Library/Application Support/amadeuz/data.json`
+```json
+{ "folders": [...], "notes": [...] }
+```
 
 ### Settings storage
 `UserDefaults` — key `"serverAddress"`
@@ -114,14 +150,22 @@ Default server: `ws://localhost:8080/ws`
 | File | Role |
 |------|------|
 | `NoteApp.swift` | `@main` entry; `AppDelegate` forces foreground activation (SPM quirk) |
-| `ContentView.swift` | `TextEditor` + status bar + settings sheet |
-| `NoteViewModel.swift` | State, debounce (Combine), sync logic, offline-first merge |
-| `LocalStore.swift` | Read/write `note.json` in Application Support |
-| `SyncService.swift` | `URLSessionWebSocketTask` wrapper, auto-reconnect |
+| `Models.swift` | `Folder`, `Note`, `WSMsg` — all types + Codable conformance |
+| `ContentView.swift` | `NavigationSplitView` with `FolderSidebar`, `NoteList`, `NoteEditor` |
+| `NoteViewModel.swift` | `NotesViewModel` — state, selection management, debounce, sync |
+| `LocalStore.swift` | Read/write `data.json` (folders + notes) in Application Support |
+| `SyncService.swift` | `URLSessionWebSocketTask` wrapper, generic `WSMsg` handler, auto-reconnect |
+
+### Selection + debounce design
+- `NotesViewModel` tracks `editingNoteID` (private) separate from `selectedNoteID` (published)
+- `noteSelectionChanged(from:to:)` flushes pending changes to outgoing note, loads incoming note
+- Called from view's `.onChange(of: vm.selectedNoteID)` — view is the trigger, not Combine
+- Debounce uses `Publishers.CombineLatest($editingTitle, $editingContent)` — fires 500ms after last change to either field
 
 ### Known quirks
 - SPM executables don't activate as foreground apps by default. Fixed with `AppDelegate`:
   `NSApp.setActivationPolicy(.regular)` + `NSApp.activate(ignoringOtherApps: true)`
+- Notes created offline (no server connection) are not persisted to server — dropped on reconnect (POC limitation)
 
 ---
 

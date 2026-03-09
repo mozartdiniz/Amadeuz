@@ -1,16 +1,5 @@
 import Foundation
 
-private struct WSMessage: Codable {
-    var type: String
-    var content: String
-    var updatedAt: Int64
-
-    enum CodingKeys: String, CodingKey {
-        case type, content
-        case updatedAt = "updated_at"
-    }
-}
-
 /// Manages a WebSocket connection to the sync server.
 /// Automatically reconnects when the connection drops.
 final class SyncService {
@@ -18,12 +7,15 @@ final class SyncService {
     private var task: URLSessionWebSocketTask?
     private var alive = true
 
-    private let onMessage: (String, Int64) -> Void
+    private let onMessage: (WSMsg) -> Void
     private let onConnectionChange: (Bool) -> Void
+
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
 
     init(
         url: URL,
-        onMessage: @escaping (String, Int64) -> Void,
+        onMessage: @escaping (WSMsg) -> Void,
         onConnectionChange: @escaping (Bool) -> Void
     ) {
         self.url = url
@@ -53,10 +45,10 @@ final class SyncService {
             case .success(let message):
                 if case .string(let text) = message,
                    let data = text.data(using: .utf8),
-                   let msg = try? JSONDecoder().decode(WSMessage.self, from: data)
+                   let msg = try? self.decoder.decode(WSMsg.self, from: data)
                 {
                     self.onConnectionChange(true)
-                    self.onMessage(msg.content, msg.updatedAt)
+                    self.onMessage(msg)
                 }
                 self.receive()
 
@@ -72,10 +64,9 @@ final class SyncService {
 
     // MARK: - Public
 
-    func send(content: String, updatedAt: Int64) {
-        let msg = WSMessage(type: "update", content: content, updatedAt: updatedAt)
+    func send(_ msg: WSMsg) {
         guard
-            let data = try? JSONEncoder().encode(msg),
+            let data = try? encoder.encode(msg),
             let text = String(data: data, encoding: .utf8)
         else { return }
         task?.send(.string(text)) { _ in }
