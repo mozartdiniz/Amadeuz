@@ -129,8 +129,32 @@ Default server: `ws://localhost:8080/ws`
 
 **Status:** POC complete
 **Location:** `notes/windows/`
-**Build:** Open `Amadeuz.sln` in Visual Studio 2022, press F5
+**Build (dev):** Open `Amadeuz.sln` in Visual Studio 2022, press F5
 **Requires:** Visual Studio 2022 + Windows App SDK workload, Windows 11
+
+### Publish (xcopy-deployable folder)
+
+Use MSBuild from Visual Studio — **not** `dotnet publish` (it fails on WinUI 3 PRI generation):
+
+```
+"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" \
+  notes/windows/Amadeuz/Amadeuz.csproj \
+  -t:Publish \
+  -p:Configuration=Release \
+  -p:RuntimeIdentifier=win-x64 \
+  -p:SelfContained=true \
+  -p:PublishDir=notes/windows/publish
+```
+
+The output folder is self-contained for .NET (no .NET install needed on target), but requires
+**Windows App Runtime 1.8** to be installed on the machine. On first run on a new machine,
+the app shows a dialog offering to install it automatically.
+
+### Key csproj settings
+- `WindowsPackageType=None` — unpackaged, no MSIX, no Developer Mode needed
+- `WindowsAppSdkBootstrapInitialize=true` — must be explicit; without it XAML crashes silently
+- No `WindowsAppSDKSelfContained` — bundling native WinAppSDK DLLs causes crashes on Windows Insider Preview
+- Custom target `CopyPriFilesToPublish` — copies `*.pri` resource files to publish output (required for XAML)
 
 ### What it does
 All POC features. See feature matrix above.

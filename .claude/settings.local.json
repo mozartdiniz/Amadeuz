@@ -13,7 +13,16 @@
       "Bash(git add:*)",
       "Bash(ls:*)",
       "Bash(chmod +x:*)",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "Bash(dotnet publish:*)",
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\":*)",
+      "Bash(./Amadeuz.exe:*)",
+      "Bash(powershell:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(dotnet:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd:*)",
+      "Bash(dotnet restore:*)"
     ]
   }
 }

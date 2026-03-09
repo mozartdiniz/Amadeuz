@@ -32,7 +32,8 @@ UpgradeLog.htm
 # ── Windows ───────────────────────────────────────────────────────────────────
 Thumbs.db
 Desktop.ini
-
+/notes/windows/publish
+/notes/windows/publish2
 # ── Editors ───────────────────────────────────────────────────────────────────
 .idea/
 *.swp

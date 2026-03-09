@@ -230,13 +230,13 @@ amadeuz/
 
 ## Roadmap
 
-### Phase 1 — Single note POC ✅
-- [x] Go server
-- [x] macOS client
-- [x] Windows client
-- [x] Linux client
-- [ ] iOS client
-- [ ] End-to-end test: all platforms syncing over LAN simultaneously
+### Phase 1 — Single note POC ✅ COMPLETE
+- [x] Go server — running on Raspberry Pi 3 B via systemd
+- [x] macOS client — Swift + SwiftUI, runs via `swift run`
+- [x] Windows client — C# + WinUI 3, distributed as xcopy-deployable folder
+- [x] Linux client — C++ + GTK4, built with CMake
+- [x] End-to-end validated: Mac, Windows, and Linux syncing over LAN simultaneously
+- [ ] iOS client — deferred; shares logic with macOS, build after Phase 2 is stable
 
 ### Phase 2 — Notes feature: full POC (in progress)
 
@@ -291,3 +291,8 @@ HTTPS/WSS, dynamic DNS or relay service, proper packaging (`.app`, `.msix`, `.de
 | Note key per note, wrapped per user | Sharing requires that collaborators decrypt independently. Re-wrapping the note key (not re-encrypting the note content) for each new collaborator is O(1) in ciphertext size regardless of note size. |
 | Echo guard by timestamp, not content | With E2E encryption, two encryptions of the same plaintext produce different ciphertext (random AES-GCM nonce). Content equality comparison would always treat own updates as new and cause an infinite loop. |
 | JWT via query param for WebSocket auth | HTTP headers are not reliably transmitted during WebSocket upgrade from all client environments. Query parameter is universally supported. |
+| WinAppSDK: no self-contained native bundling | `WindowsAppSDKSelfContained=true` bundles WinAppSDK native DLLs that are incompatible with Windows Insider Preview builds (CoreMessagingXP.dll version mismatch). Removed; app relies on the installed Windows App Runtime instead. Users get an install prompt on first run on a new machine — acceptable tradeoff. |
+| WinAppSDK 1.8 (not 1.6) | WinAppSDK 1.6 bootstrap failed on Windows Insider due to CBS package identity mismatch. 1.8 is the current stable release and was already installed on the dev machine. |
+| `WindowsAppSdkBootstrapInitialize=true` explicit | WinAppSDK's build targets auto-disable bootstrap initialization when `WindowsAppSDKSelfContained=true` is set. Since we removed that flag, bootstrap init must be forced on explicitly, otherwise the app crashes silently (STATUS_FAIL_FAST_EXCEPTION) before XAML loads. |
+| PRI files must be in publish folder | Without `WindowsAppSDKSelfContained`, the WinUI resource files (Amadeuz.pri, Microsoft.UI.pri, etc.) are not copied to the publish output automatically. Added a custom MSBuild target `CopyPriFilesToPublish` in the csproj to fix this. |
+| Windows publish via VS MSBuild, not dotnet CLI | `dotnet publish` fails on WinUI 3 projects because PRI generation (`ExpandPriContent` task) requires VS-installed tools not present in the dotnet SDK. Use `MSBuild.exe` from Visual Studio 2022. |

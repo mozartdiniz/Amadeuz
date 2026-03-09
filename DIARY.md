@@ -350,6 +350,104 @@ What is missing before calling this a real POC:
 
 ---
 
+## March 9, 2026 (late) — Getting the Windows app to run outside Visual Studio
+
+### The problem with "just double-click it"
+
+After the Windows app was working in Visual Studio, there was one thing left to do before
+calling the POC complete: make it run like a normal app. Not from the IDE. Not with a
+developer environment set up. Just: copy a folder somewhere, double-click the exe, it opens.
+
+This turned out to be the hardest part of the entire Windows client.
+
+### First attempt: dotnet publish
+
+The natural tool for publishing a .NET app is `dotnet publish`. Run it, point it at the
+project, get a self-contained folder. Except WinUI 3 is not a normal .NET app — it uses the
+Windows App SDK, which has a resource compilation step (`ExpandPriContent`) that requires
+tools installed by Visual Studio, not the dotnet SDK. `dotnet publish` exits with an error
+about a missing DLL somewhere in the VS install path.
+
+The fix: use `MSBuild.exe` from Visual Studio directly.
+The lesson: WinUI 3 builds are Visual Studio builds, not dotnet builds. The toolchain is
+different in ways that are easy to miss until you hit them.
+
+### The silent crash
+
+First successful publish: 354 files, 163 MB. Double-click. Nothing happens. No window,
+no error message, nothing.
+
+The Windows Event Log had the answer: `STATUS_FAIL_FAST_EXCEPTION` from `Microsoft.UI.Xaml.dll`.
+The XAML framework was calling `RaiseFailFastException` — a fast-kill that generates no
+dialog and no output — because the Windows App Runtime had never been initialized.
+
+WinUI 3 unpackaged apps require the Windows App Runtime to be bootstrapped before XAML can
+activate any WinRT classes. There is a mechanism for this — `MddBootstrapAutoInitializer.cs`,
+a C# file included by the WinAppSDK build targets that uses a `[ModuleInitializer]` to run
+bootstrap initialization before `Main`. But it is disabled by a condition in
+`BootstrapCommon.targets`:
+
+```xml
+Condition="... and '$(WindowsAppSDKSelfContained)'!='true' ...">
+    <WindowsAppSdkBootstrapInitialize>true</WindowsAppSdkBootstrapInitialize>
+```
+
+Because `WindowsAppSDKSelfContained=true` was set in the project, the auto-init never ran.
+The fix: `<WindowsAppSdkBootstrapInitialize>true</WindowsAppSdkBootstrapInitialize>` in the
+csproj, which forces the auto-initializer on regardless of the self-contained setting.
+
+### The version mismatch
+
+With bootstrap initialization enabled, the app finally showed some life: a dialog asking
+to install Windows App Runtime 1.6. The installed runtime was already 1.6 — or so it seemed.
+
+The machine is running Windows Insider Preview. It has a CBS (Component Based Servicing)
+version of the Windows App Runtime pre-installed as a Windows component. The bootstrapper
+from the NuGet package looks for the Store-distributed package by a specific package family
+name. The CBS package has a different name and is invisible to it.
+
+Upgrading to WinAppSDK 1.8 (the current stable release) changed the error: the dialog
+disappeared, but the app crashed immediately in `CoreMessagingXP.dll` with `STATUS_NOT_SUPPORTED`.
+The self-contained publish had bundled `CoreMessagingXP.dll` version 10.0.27108 — a DLL built
+against a Windows build newer than the one on this machine (26200). The bundled DLL was
+calling an API that did not exist yet on this OS version.
+
+### The actual fix
+
+Remove `WindowsAppSDKSelfContained=true`. Stop bundling the WinAppSDK native DLLs entirely.
+Let the bootstrapper find and use the Windows App Runtime that is installed on the system.
+
+The app is still self-contained for .NET (the .NET 9 runtime is included in the publish
+folder). Only the WinAppSDK native layer comes from the system install. The installed
+non-CBS `Microsoft.WindowsAppRuntime.1.8` (version 8000.770.947.0) was found and loaded.
+
+One remaining issue: without self-contained WinAppSDK, the PRI resource files — the Windows
+binary format for app resources — were no longer copied to the publish output. XAML needs
+these to resolve `ms-appx:///` URIs at startup. The crash was deep inside
+`Microsoft.UI.Xaml.dll` this time. The fix: copy them manually from the build output,
+then add a custom MSBuild target (`CopyPriFilesToPublish`) to the csproj so future publishes
+include them automatically.
+
+After that: it worked.
+
+> 📝 *Write here: how did it feel to spend this much time on packaging — a problem that
+> has nothing to do with the app's actual functionality? Is this kind of platform friction
+> frustrating, or is debugging it satisfying in its own way? What does it say about the
+> state of Windows development tooling that this isn't straightforward?*
+
+### POC complete
+
+With the Windows app distributable as a folder, the Phase 1 POC is done. Three native
+clients — macOS, Windows, Linux — all syncing to a server running on a Raspberry Pi over
+LAN. Each client built in the idiomatic language and framework for its platform, with no
+shared code except a JSON protocol.
+
+The next phase begins: user accounts, multiple notes, end-to-end encryption, and sharing.
+The architecture for all of this was already designed in the previous session.
+The foundation is ready. Time to build on it.
+
+---
+
 ## March 9, 2026 (evening) — The hard questions: users, encryption, sharing
 
 ### Why this conversation happened now

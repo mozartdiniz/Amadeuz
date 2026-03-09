@@ -10,21 +10,30 @@
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <UseWinUI>true</UseWinUI>
-    <!-- Unpackaged + self-contained: no MSIX deployment or Developer Mode needed.
-         Switch to EnableMsixTooling=true and remove these two lines when publishing. -->
     <WindowsPackageType>None</WindowsPackageType>
-    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- Force bootstrap initialization even in self-contained mode.
+         Without this, MddBootstrapAutoInitializer never runs for self-contained builds,
+         so the Windows App Runtime is never activated before XAML tries to use it. -->
+    <WindowsAppSdkBootstrapInitialize>true</WindowsAppSdkBootstrapInitialize>
   </PropertyGroup>
 
   <ItemGroup>
     <None Remove="Package.appxmanifest"/>
   </ItemGroup>
 
+  <!-- Copy PRI resource files to publish output (required for unpackaged WinUI 3) -->
+  <Target Name="CopyPriFilesToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <PriFiles Include="$(TargetDir)*.pri" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PriFiles)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250108002" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260209005" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
   </ItemGroup>
 
 </Project>
