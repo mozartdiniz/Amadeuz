@@ -30,7 +30,8 @@
       "Bash(ldd:*)",
       "Bash(/home/mozartdiniz/Dev/Amadeuz/VISION.md:*)",
       "Bash(xcodegen:*)",
-      "Bash(open:*)"
+      "Bash(open:*)",
+      "Bash(xcrun xctrace:*)"
     ]
   }
 }
