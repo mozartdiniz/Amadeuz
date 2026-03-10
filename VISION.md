@@ -22,6 +22,7 @@ Users should not be able to tell this isn't a platform-first app.
 |----------|---------------------|
 | macOS    | Swift + SwiftUI     |
 | iOS      | Swift + SwiftUI     |
+| Android  | Kotlin + Jetpack Compose |
 | Windows  | C# + WinUI 3        |
 | Linux    | C++ + GTK4          |
 | Server   | Go                  |
@@ -237,6 +238,7 @@ amadeuz/
 - [x] Linux client — C++ + GTK4, built with CMake
 - [x] End-to-end validated: Mac, Windows, and Linux syncing over LAN simultaneously
 - [x] iOS client — Swift + SwiftUI, shares `LocalStore`/`SyncService` with macOS, running on device
+- [ ] Android client — Kotlin + Jetpack Compose, code complete, pending first device run
 
 ### Phase 2 — Notes feature: full POC (in progress)
 
@@ -308,3 +310,9 @@ HTTPS/WSS, dynamic DNS or relay service, proper packaging (`.app`, `.msix`, `.de
 | `GtkGestureClick` + `GtkPopover` for context menus (Linux) | GTK4 removed `GtkMenu`. The replacement for right-click menus is `GtkGestureClick` (button=3) attached to each row, with data stored on the gesture via `g_object_set_data`. On press, a `GtkPopover` with frameless buttons is created, parented to the row, and shown. Unparented in `GtkPopover::closed` to avoid leaks. |
 | `GtkStack` for editor empty/active state (Linux) | When no note is selected, a "Select a note" placeholder should be shown instead of the editor. `GtkStack` with named pages ("empty" / "editor") is the idiomatic GTK4 approach — cleaner than showing/hiding individual widgets. |
 | `GTK_EVENT_CONTROLLER()` cast required (Linux) | `GtkGesture` is a subclass of `GtkEventController`, but the incomplete-type forward declaration in the GTK4 headers prevents an implicit conversion. `GTK_EVENT_CONTROLLER(gesture)` macro is required when calling `gtk_widget_add_controller`. |
+| Kotlin + Jetpack Compose for Android | Kotlin is Google's first-class Android language (Java is legacy). Jetpack Compose is the modern declarative UI toolkit — similar mental model to SwiftUI. MVVM + ViewModel + StateFlow is the Google-recommended architecture. No alternative seriously considered. |
+| OkHttp for Android WebSocket | De facto standard for HTTP/WebSocket on Android. Simpler API than `java.net.http` (added in API 21 but WebSocket support is limited). Well-maintained, Kotlin-idiomatic. |
+| Gson for Android JSON | Simpler than `kotlinx.serialization` (requires no Kotlin compiler plugin). No custom serializer needed — Gson omits null fields by default, which is exactly what the wire protocol requires. |
+| Handler.postDelayed for Android reconnect | OkHttp WebSocket callbacks arrive on OkHttp dispatcher threads. Reconnect needs a delay before retrying. `Handler(Looper.getMainLooper()).postDelayed()` is the simplest correct solution — no coroutine scope needed in SyncService, no Thread.sleep blocking a dispatcher thread. |
+| Navigation drawer instead of three-column layout (Android) | Persistent three-column layouts are not appropriate for portrait phone screens. The drawer pattern is the Android-native equivalent: swipe or tap the hamburger to reveal folders, tap a note to open the editor full-screen. On large screens (tablets), a future iteration could use `NavigationRail` or `PermanentNavigationDrawer`. |
+| AGP 9.x applies kotlin-android internally | Adding `org.jetbrains.kotlin.android` to `plugins {}` in AGP 9.x causes "Cannot add extension 'kotlin'" — the plugin is already applied by the Android Gradle Plugin. The `kotlin.compose` plugin (Compose compiler) must still be added explicitly. |

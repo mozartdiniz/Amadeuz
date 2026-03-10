@@ -13,31 +13,34 @@
 
 ## Feature matrix
 
-| Feature | Server | macOS | Windows | Linux | iOS |
-|---------|:------:|:-----:|:-------:|:-----:|:---:|
-| Single note editor | — | ✅ | ✅ | ✅ | ✅ |
-| Offline-first local storage | — | ✅ | ✅ | ✅ | ✅ |
-| WebSocket connection to server | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Auto-reconnect (3 s) | — | ✅ | ✅ | ✅ | ✅ |
-| 500 ms debounce save | — | ✅ | ✅ | ✅ | ✅ |
-| Timestamp merge (last-write-wins) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Push local-ahead note on connect | — | ✅ | ✅ | ✅ | ✅ |
-| Connection status indicator | — | ✅ | ✅ | ✅ | ✅ |
-| Configurable server address | — | ✅ | ✅ | ✅ | ✅ |
-| Persistent server address | — | ✅ | ✅ | ✅ | ✅ |
-| Server persistence (data.json) | ✅ | — | — | — | — |
-| Multiple notes | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Folders (create / rename / delete) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| "All Notes" view | — | ✅ | ✅ | ✅ | ✅ |
-| Default folder bootstrap | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Three-column layout | — | ✅ | ✅ | ✅ | ✅ |
-| Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Create / delete notes (toolbar + context menu) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Note list with title, date, preview | — | ✅ | ✅ | ✅ | ✅ |
-| **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ |
+> Android column: code is written and reviewed but not yet run on a device (blocked by
+> slow dev machine). ⏳ = implemented, pending first real run.
+
+| Feature | Server | macOS | Windows | Linux | iOS | Android |
+|---------|:------:|:-----:|:-------:|:-----:|:---:|:-------:|
+| Single note editor | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Offline-first local storage | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| WebSocket connection to server | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Auto-reconnect (3 s) | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| 500 ms debounce save | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Timestamp merge (last-write-wins) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Push local-ahead note on connect | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Connection status indicator | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Configurable server address | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Persistent server address | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Server persistence (data.json) | ✅ | — | — | — | — | — |
+| Multiple notes | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Folders (create / rename / delete) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| "All Notes" view | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Default folder bootstrap | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Drawer/sidebar navigation | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Create / delete notes | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Note list with title, date, preview | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 ---
 
@@ -357,3 +360,66 @@ Default server: `ws://localhost:8080/ws`
 ### Known quirks
 - `NavigationSplitView` on iPhone collapses to a stack — the three-column layout becomes a drill-down navigation. Works correctly on iPad and in landscape on large iPhones.
 - Notes created offline are not persisted to server on reconnect (same POC limitation as macOS).
+
+---
+
+## Android (Kotlin + Jetpack Compose)
+
+**Status:** Code complete, not yet run on a device. Pending test on a faster machine.
+**Location:** `notes/android/`
+**Build:** Open in Android Studio, sync Gradle, run on emulator or physical device
+
+### What it does (by design — pending first run)
+- Navigation drawer for folder list (replaces three-column layout — mobile-appropriate)
+- Note list as main screen; tapping a note opens a full-screen editor
+- FAB to create a new note (only visible when a real folder is selected)
+- Full offline-first: loads `data.json` on startup, works without server
+- Debounce: 500ms after last change to title or content → save locally + push to server
+- Per-note last-write-wins merge on reconnect (push local if ahead)
+- Auto-reconnect every 3 seconds; green/red dot in top bar
+- Settings dialog for configurable server URL (stored in SharedPreferences)
+- "All Notes" virtual view across all folders
+
+### Local storage
+`<App>/files/data.json` (internal storage, via `context.filesDir`)
+```json
+{ "folders": [...], "notes": [...] }
+```
+
+### Settings storage
+`SharedPreferences` — key `"serverAddress"`
+Default server: `ws://localhost:8080/ws`
+
+### Key files
+| File | Role |
+|------|------|
+| `Models.kt` | `Folder`, `Note`, `WSMsg` data classes |
+| `LocalStore.kt` | Read/write `data.json` via Gson |
+| `SyncService.kt` | OkHttp WebSocket, Handler-based 3s reconnect |
+| `NoteViewModel.kt` | `AndroidViewModel` — StateFlow state, debounce, sync, CRUD |
+| `NoteScreen.kt` | All Compose UI: drawer, note list, editor, settings dialog |
+| `MainActivity.kt` | Wires ViewModel into Compose via `by viewModels()` |
+
+### Dependencies added (beyond scaffolded defaults)
+| Library | Version | Used for |
+|---------|---------|----------|
+| `com.squareup.okhttp3:okhttp` | 4.12.0 | WebSocket client |
+| `com.google.code.gson:gson` | 2.10.1 | JSON serialization |
+| `androidx.compose.material:material-icons-core` | BOM-managed | UI icons |
+
+### Architecture notes
+- `NoteViewModel` is an `AndroidViewModel` — needs `Application` context for `LocalStore` and `SharedPreferences`
+- All StateFlows are `MutableStateFlow` internally, exposed as `StateFlow` (read-only)
+- Debounce uses `viewModelScope.launch { delay(500) }` with `Job.cancel()` on each keystroke
+- WebSocket callbacks (OkHttp threads) dispatch to main thread via `viewModelScope.launch(Dispatchers.Main)`
+- Reconnect delay uses `android.os.Handler(Looper.getMainLooper()).postDelayed()` — no extra threading needed
+- Gson default behaviour omits null fields from serialization — no custom serializer needed
+
+### Build issues encountered (already fixed)
+- `kotlin-android` plugin conflict: AGP 9.x already applies it internally — adding it explicitly causes `Cannot add extension 'kotlin'`. Removed from both `build.gradle.kts` files.
+- `Icons.Default.Circle` and `Icons.Default.CreateNewFolder` are in `material-icons-extended`, not core. Replaced: `Circle` → `Box` with `CircleShape` background; `CreateNewFolder` → `Icons.Default.Add`.
+
+### Known differences from other clients
+- Mobile layout uses a navigation drawer instead of a persistent column sidebar
+- No persistent three-column view (not appropriate for phone screens)
+- Context menus accessed via `MoreVert` (⋮) icon buttons rather than right-click
