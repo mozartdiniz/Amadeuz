@@ -998,3 +998,65 @@ Next milestone: Phase 2a — user accounts, JWT auth, per-user data isolation.
 > 📝 *Write here: how did the GTK4 implementation compare to writing the same feature
 > in Swift/SwiftUI and C#/WinUI? What was hardest — the C API wrappers, the context
 > menu approach, or keeping the selection state consistent across list rebuilds?*
+
+---
+
+## March 10, 2026 — iOS: the easiest client yet
+
+### What happened
+
+The iOS app is now running on a real iPhone, feature-complete against the other platforms.
+All POC features are ✅ across macOS, Windows, Linux, and iOS.
+
+> 📝 *Write here: what made you finally sit down and do the iOS port? Was it the natural
+> next step after Linux, or did something trigger it? What was the first moment you saw
+> it sync on the phone?*
+
+### How it came together
+
+The iOS client lives in `notes/ios/` and is built with Xcode (`Notes.xcodeproj`).
+The structure mirrors the macOS app almost exactly — the same six files, the same
+responsibilities, the same sync and storage logic.
+
+`LocalStore.swift` and `SyncService.swift` are effectively unchanged. Swift compiles
+for both platforms with zero conditional compilation. The only real difference is the
+storage path — iOS uses the app's sandboxed Application Support directory rather than
+`~/Library/Application Support/amadeuz/` — which `LocalStore` already handles via
+`FileManager.default.urls(for:in:)`.
+
+The view layer needed minor adaptation. The most visible: `NavigationSplitView` on
+iPhone collapses to a drill-down stack navigation automatically. SwiftUI handles this
+without any extra code — the three-column layout works as-is on iPad and large iPhones
+in landscape; on a regular iPhone it becomes folder list → note list → note editor,
+which is the correct mobile UX anyway. The framework earned its keep here.
+
+One thing that did not need doing: the `AppDelegate` activation hack from the macOS
+app (`NSApp.setActivationPolicy(.regular)` + `activate(ignoringOtherApps:)`). That
+was a workaround for an SPM executable quirk on macOS. iOS apps are always foreground
+by default. `NoteApp.swift` for iOS is four lines.
+
+### Code sharing observations
+
+The promise of "Swift on Apple platforms shares code" held up well. The logic layer
+(`NoteViewModel.swift`) needed only minor adjustments — `UserDefaults` is available
+on both platforms, `URLSession` WebSocket is available on both, and the `Combine`-based
+debounce is identical. The models are byte-for-byte the same file.
+
+The view layer is where platforms diverge meaningfully, and that is fine. The macOS
+`ContentView.swift` uses `NSAlert`-style dialogs implicitly via `confirmationDialog`;
+the iOS version uses `.alert` with `TextField` for folder naming inputs. These are
+different APIs but the same user intent. Trying to share them would produce worse code
+on both platforms.
+
+### Where things stand
+
+All five targets (server, macOS, Windows, Linux, iOS) are now at Phase 2b:
+three-column layout, folders, multiple notes, offline-first, debounced sync,
+per-note last-write-wins. The feature matrix is uniform across every platform.
+
+Next milestone: Phase 2a — user accounts, JWT auth, per-user data isolation.
+The server restructure (SQLite + `internal/` packages) is the blocker; all clients
+are ready to add a login screen once the server exposes auth endpoints.
+
+> 📝 *Write here: now that all four clients exist, what does the project feel like?
+> Does it feel like a real product yet, or still a POC? What would make it feel real?*

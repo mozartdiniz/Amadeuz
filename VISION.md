@@ -223,7 +223,7 @@ amadeuz/
     │       └── CryptoService.swift  ← X25519 keypair, AES-GCM, key wrap
     ├── windows/         ← Windows (C# + WinUI 3)
     ├── linux/           ← Linux (C++ + GTK4)
-    └── ios/             ← iOS — not started
+    └── ios/             ← iOS (Swift + SwiftUI)
 ```
 
 ---
@@ -236,7 +236,7 @@ amadeuz/
 - [x] Windows client — C# + WinUI 3, distributed as xcopy-deployable folder
 - [x] Linux client — C++ + GTK4, built with CMake
 - [x] End-to-end validated: Mac, Windows, and Linux syncing over LAN simultaneously
-- [ ] iOS client — deferred; shares logic with macOS, build after Phase 2 is stable
+- [x] iOS client — Swift + SwiftUI, shares `LocalStore`/`SyncService` with macOS, running on device
 
 ### Phase 2 — Notes feature: full POC (in progress)
 
@@ -246,7 +246,7 @@ These are developed in order — each phase blocks the next.
 Server restructured as modular monolith (SQLite, `internal/` packages, JWT auth).
 Clients gain login/register UI, JWT stored in platform credential store.
 
-**Phase 2b — Multiple notes + folders** ✅ COMPLETE (server + macOS + Windows + Linux)
+**Phase 2b — Multiple notes + folders** ✅ COMPLETE (server + macOS + Windows + Linux + iOS)
 Server: folder + note CRUD over typed WebSocket messages, in-memory store + data.json.
 Client: three-column layout (folder sidebar, note list, note editor) on all three desktop platforms.
 

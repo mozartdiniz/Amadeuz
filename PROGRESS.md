@@ -15,26 +15,26 @@
 
 | Feature | Server | macOS | Windows | Linux | iOS |
 |---------|:------:|:-----:|:-------:|:-----:|:---:|
-| Single note editor | — | ✅ | ✅ | ✅ | ❌ |
-| Offline-first local storage | — | ✅ | ✅ | ✅ | ❌ |
-| WebSocket connection to server | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Auto-reconnect (3 s) | — | ✅ | ✅ | ✅ | ❌ |
-| 500 ms debounce save | — | ✅ | ✅ | ✅ | ❌ |
-| Timestamp merge (last-write-wins) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Push local-ahead note on connect | — | ✅ | ✅ | ✅ | ❌ |
-| Connection status indicator | — | ✅ | ✅ | ✅ | ❌ |
-| Configurable server address | — | ✅ | ✅ | ✅ | ❌ |
-| Persistent server address | — | ✅ | ✅ | ✅ | ❌ |
+| Single note editor | — | ✅ | ✅ | ✅ | ✅ |
+| Offline-first local storage | — | ✅ | ✅ | ✅ | ✅ |
+| WebSocket connection to server | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Auto-reconnect (3 s) | — | ✅ | ✅ | ✅ | ✅ |
+| 500 ms debounce save | — | ✅ | ✅ | ✅ | ✅ |
+| Timestamp merge (last-write-wins) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Push local-ahead note on connect | — | ✅ | ✅ | ✅ | ✅ |
+| Connection status indicator | — | ✅ | ✅ | ✅ | ✅ |
+| Configurable server address | — | ✅ | ✅ | ✅ | ✅ |
+| Persistent server address | — | ✅ | ✅ | ✅ | ✅ |
 | Server persistence (data.json) | ✅ | — | — | — | — |
-| Multiple notes | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Folders (create / rename / delete) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| "All Notes" view | — | ✅ | ✅ | ✅ | ❌ |
-| Default folder bootstrap | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Three-column layout | — | ✅ | ✅ | ✅ | ❌ |
-| Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Create / delete notes (toolbar + context menu) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Note list with title, date, preview | — | ✅ | ✅ | ✅ | ❌ |
+| Multiple notes | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Folders (create / rename / delete) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| "All Notes" view | — | ✅ | ✅ | ✅ | ✅ |
+| Default folder bootstrap | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Three-column layout | — | ✅ | ✅ | ✅ | ✅ |
+| Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Create / delete notes (toolbar + context menu) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Note list with title, date, preview | — | ✅ | ✅ | ✅ | ✅ |
 | **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -313,11 +313,47 @@ Default server: `ws://localhost:8080/ws`
 
 ## iOS (Swift + SwiftUI)
 
-**Status:** Not started
-**Location to create:** `notes/ios/`
+**Status:** Phase 2b complete — folders + multiple notes, three-column layout, running on device
+**Location:** `notes/ios/`
+**Build:** Open `notes/ios/Notes.xcodeproj` in Xcode, select your device, press Run
+**Requires:** Xcode + Apple Developer account (free tier works for personal device)
 
-### Plan
-- Will share `LocalStore.swift` and `SyncService.swift` logic with the macOS client
-- UI adapted for mobile: full-screen text editor, settings via system Settings or in-app sheet
-- Local storage: app's Documents or Application Support directory
-- No `AppDelegate` activation hack needed on iOS
+### What it does
+- `NavigationSplitView` three-column layout: folder sidebar | note list | note editor
+- Create/rename/delete folders (context menu on folder rows)
+- Create/delete notes (toolbar button + context menu)
+- Note list sorted by `updatedAt` descending, with title, date, and content preview
+- "All Notes" virtual view shows all notes across all folders
+- Full offline-first: loads `data.json` on startup, works without server
+- Debounce: 500ms after last change to title or content → save locally + push to server
+- Per-note last-write-wins merge on reconnect (push local if ahead)
+- Auto-reconnect every 3 seconds; green/red status dot in toolbar
+- Settings sheet for configurable server URL (stored in `UserDefaults`)
+- No `AppDelegate` activation hack — iOS apps are foreground by default
+
+### Local storage
+`<App>/Library/Application Support/amadeuz/data.json`
+```json
+{ "folders": [...], "notes": [...] }
+```
+
+### Settings storage
+`UserDefaults` — key `"serverAddress"`
+Default server: `ws://localhost:8080/ws`
+
+### Key files
+| File | Role |
+|------|------|
+| `NoteApp.swift` | `@main` entry; clean — no AppDelegate hack needed on iOS |
+| `Models.swift` | `Folder`, `Note`, `WSMsg` — shared type definitions |
+| `ContentView.swift` | `NavigationSplitView` with `FolderSidebar`, `NoteList`, `NoteEditor`, `SettingsView` |
+| `NoteViewModel.swift` | `NotesViewModel` — state, selection, debounce, sync, CRUD |
+| `LocalStore.swift` | Read/write `data.json` in Application Support |
+| `SyncService.swift` | `URLSessionWebSocketTask` wrapper, auto-reconnect (shared logic with macOS) |
+
+### Code sharing with macOS
+`LocalStore.swift`, `SyncService.swift`, and `Models.swift` are functionally identical to the macOS versions. The view layer (`ContentView.swift`, `NoteViewModel.swift`) is adapted for touch — alert-based dialogs instead of popover context menus where needed, keyboard type hints in `SettingsView`.
+
+### Known quirks
+- `NavigationSplitView` on iPhone collapses to a stack — the three-column layout becomes a drill-down navigation. Works correctly on iPad and in landscape on large iPhones.
+- Notes created offline are not persisted to server on reconnect (same POC limitation as macOS).
