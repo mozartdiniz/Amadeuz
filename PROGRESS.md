@@ -53,7 +53,7 @@
 **Status:** Phase 2b in progress — multiple notes + folders implemented, no auth yet.
 **Location:** `server/`
 **Run:** `cd server && go mod tidy && go run .`
-**Port:** `8080` on all interfaces (`0.0.0.0`)**Tests:** `cd server && go test ./...` (20 unit tests, all passing)
+**Port:** `8080` on all interfaces (`0.0.0.0`)**Tests:** `cd server && go test ./...` (22 unit tests, all passing)
 
 
 ### Current state (Phase 2b)
@@ -69,15 +69,19 @@
 
 **Client → Server:**
 ```json
-{ "type": "create_folder", "name": "Work" }
+{ "type": "create_folder", "name": "Work" }                                       ← server generates ID
+{ "type": "create_folder", "folder_id": "<client-uuid>", "name": "Work" }         ← client-provided ID (offline sync)
 { "type": "rename_folder", "folder_id": "...", "name": "Work Projects" }
 { "type": "delete_folder", "folder_id": "..." }
-{ "type": "create_note",   "title": "My Note" }               ← folder_id optional; omit for unfoldered
+{ "type": "create_note",   "title": "My Note" }                                   ← folder_id optional; omit for unfoldered
 { "type": "create_note",   "folder_id": "...", "title": "My Note" }
+{ "type": "create_note",   "note_id": "<client-uuid>", "folder_id": "...", "title": "...", "content": "...", "updated_at": 123 }  ← full offline note
 { "type": "update_note",   "note_id": "...", "title": "...", "content": "...", "updated_at": 123456 }
-{ "type": "move_note",     "note_id": "...", "folder_id": "..." }  ← folder_id empty = no folder
+{ "type": "move_note",     "note_id": "...", "folder_id": "..." }                  ← folder_id empty = no folder
 { "type": "delete_note",   "note_id": "..." }
 ```
+
+`folder_id` and `note_id` on create messages are optional. If provided, the server uses them; if absent, the server generates a UUID. This lets clients create entities locally with a stable ID and push them later without ID conflicts.
 
 **Server → Client (on connect):**
 ```json
@@ -95,8 +99,9 @@
 { "type": "note_deleted",   "note_id": "..." }
 ```
 
-Create responses are sent to originating client **and** broadcast to others (client needs the server-assigned ID).
-Update/move/delete responses are broadcast to others only (sender already updated locally).
+Create responses are sent to originating client **and** broadcast to others.
+If the client already has the entity (matched by ID), the echo is a no-op.
+Update/move/delete responses are broadcast to others only.
 
 ### File layout
 ```
@@ -134,7 +139,7 @@ server/
 
 ## macOS (Swift + SwiftUI)
 
-**Status:** Phase 2b complete + UX improvements (2026-03-11)
+**Status:** Phase 2b complete + offline-first create + UX fixes (2026-03-11)
 **Location:** `notes/mac/`
 **Run:** `cd notes/mac && swift run`
 **Requires:** Xcode command-line tools + accepted license (`sudo xcodebuild -license`)
@@ -146,11 +151,13 @@ server/
 - Notes do not require a folder — can be created from "All Notes" view directly
 - Move note to a different folder (or to no folder) via right-click → "Move to Folder" submenu
 - Note list sorted by `updatedAt` descending, with title, date, content preview, and folder label
-- Folder label shown in note row (folder icon + name); hidden if note has no folder
+- Folder label shown in note row (folder icon + name); shows "—" if note has no folder (keeps row height constant)
 - Search field (top-right toolbar) filters notes by title or content; auto-switches to "All Notes" when typing
 - Full offline-first: loads `data.json` on startup, works without server
+- Create notes and folders while offline — they appear immediately, saved to disk, pushed to server on reconnect
 - Debounce: 500ms after last change to title or content → save locally + push to server
 - Per-note last-write-wins merge on reconnect (push local if ahead)
+- Local-only folders and notes created offline are pushed to server on reconnect (not dropped)
 - Auto-reconnect every 3 seconds; green/red status dot in toolbar
 
 ### Local storage
@@ -182,7 +189,6 @@ Default server: `ws://localhost:8080/ws`
 ### Known quirks
 - SPM executables don't activate as foreground apps by default. Fixed with `AppDelegate`:
   `NSApp.setActivationPolicy(.regular)` + `NSApp.activate(ignoringOtherApps: true)`
-- Notes created offline (no server connection) are not persisted to server — dropped on reconnect (POC limitation)
 
 ---
 
@@ -373,7 +379,6 @@ Default server: `ws://localhost:8080/ws`
 
 ### Known quirks
 - `NavigationSplitView` on iPhone collapses to a stack — the three-column layout becomes a drill-down navigation. Works correctly on iPad and in landscape on large iPhones.
-- Notes created offline are not persisted to server on reconnect (same POC limitation as macOS).
 
 ---
 

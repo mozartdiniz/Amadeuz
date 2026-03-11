@@ -1288,3 +1288,106 @@ The other clients (Windows, Linux, iOS, Android) are behind on these four featur
 label in the list, and no search. These are the next things to port when attention
 turns to those platforms.
 
+
+---
+
+## March 11, 2026 — True offline mode and two client bugs
+
+### The problem with the previous offline story
+
+The app claimed to be "offline-first" — and it was, in the sense that it would load
+your notes from disk and let you read and edit them without a server. But there was a
+catch: creating a note or a folder required the server. If you were offline and clicked
+"New Note", nothing happened. Silently. No error, no feedback, just nothing.
+
+This was a consequence of how creation worked: the client would send a `create_note`
+or `create_folder` message to the server, and wait for the server to respond with the
+created entity (including the server-generated ID). The client only added the note to
+its local state when the server response arrived. No server, no response, no note.
+
+There was also a related bug in `handleInit` — the merge that runs when the client
+reconnects after being offline. The comment in the code literally said:
+
+```
+// Local-only notes (created offline without server confirmation): dropped.
+```
+
+So not only did offline creation not work, any notes that somehow got into local state
+without server confirmation were silently deleted on reconnect. The app was lying about
+being offline-first for writes.
+
+### The fix: client-generated IDs
+
+The root issue was that the server owned the IDs. To fix offline creation, the client
+needed to generate the ID itself, create the entity in local state immediately, and push
+it to the server when connectivity was available.
+
+The server change was small: `CreateFolder` and `CreateNote` now accept an optional
+client-provided ID. If present, the server uses it. If absent, the server generates one.
+This makes the existing online flow (no ID sent) continue to work identically, while
+enabling the offline flow (client sends its own UUID).
+
+The client change was larger. `createFolder` and `createNote` now:
+1. Generate a UUID
+2. Build the entity locally
+3. Append it to state and save to disk
+4. Optionally push to server if connected
+
+`handleInit` (the reconnect merge) was also fixed. Local-only folders are now preserved
+and pushed to the server instead of being overwritten. Local-only notes are now kept
+and pushed with their full content (including offline edits) instead of being dropped.
+
+The result: the client works identically whether connected or not. The server is now
+truly a sync accelerator, not a dependency for basic use.
+
+> 📝 *Write here: was there a specific time when you were away from your home network,
+> opened the app, and ran into this wall? Or was it a "this will embarrass me if
+> I show someone" realization when reviewing the code?*
+
+### Two UI bugs discovered while testing
+
+**Bug 1: new note sometimes shows old content**
+
+After fixing offline creation, a pre-existing bug became more obvious. Creating a note
+would sometimes show the previously selected note's content in the editor of the new
+(empty) note.
+
+The cause was subtle. In SwiftUI, `.onChange(of:)` only fires when the observed value
+changes *while the view is already mounted*. The note list in the middle column is a
+`List` — but only when there are notes to show. When the list is empty, the view shows
+`ContentUnavailableView` instead, and the `List` is not in the hierarchy at all.
+
+When you create the first note in a folder (or the first note with no folder selected):
+- `notes.append(note)` and `selectedNoteID = note.id` both fire in the same synchronous
+  block, so SwiftUI batches them into a single render cycle
+- The `List` appears for the first time with the selection already set
+- `onChange` never sees a change — the view was just mounted with that value
+- `loadNoteIntoEditor` is never called
+- The editor still shows whatever it was showing before
+
+The fix: call `loadNoteIntoEditor` directly in `createNote()`, before setting
+`selectedNoteID`. This is unconditional — it does not depend on the `List` being
+mounted. The `onChange` path remains for user-driven selection changes and is harmless
+if called twice (idempotent).
+
+**Bug 2: note row height doesn't update after moving to a folder**
+
+Each note row shows three lines: title, content preview, and folder name.
+When a note has no folder, the folder line was hidden (using `if let folderName`),
+making the row two lines tall. When the note was moved to a folder, the folder line
+appeared — but SwiftUI had cached the row height at two lines and would crop the
+newly visible third line.
+
+The fix was simpler than the diagnosis: always show the third line. When there is no
+folder, show "—" instead of hiding the label. The row is always three lines tall, so
+SwiftUI never needs to re-measure it.
+
+### Where things stand
+
+The macOS client is now genuinely offline-first for all operations: create, edit,
+delete, move. The server handles sync when available; when it is not, everything
+still works and nothing is lost.
+
+The other platforms (Windows, Linux, iOS, Android) still have the original
+server-dependent creation flow. They will need the same client-generated ID
+treatment when it is their turn.
