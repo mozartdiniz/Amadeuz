@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:amadeuz}/notes/mac",
+            "name": "Debug Notes (notes/mac)",
+            "target": "Notes",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Notes (notes/mac)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:amadeuz}/notes/mac",
+            "name": "Release Notes (notes/mac)",
+            "target": "Notes",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Notes (notes/mac)"
+        }
+    ]
+}
