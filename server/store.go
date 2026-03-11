@@ -185,14 +185,8 @@ func (s *store) GetNotes() []Note {
 	return result
 }
 
-// CreateNote adds a new empty note in the given folder.
-// Returns the note and true, or zero value and false if the folder doesn't exist.
-func (s *store) CreateNote(folderID, title string, now int64) (Note, bool) {
-	s.mu.Lock()
-	if _, ok := s.folders[folderID]; !ok {
-		s.mu.Unlock()
-		return Note{}, false
-	}
+// CreateNote adds a new empty note. folderID may be empty for an unfoldered note.
+func (s *store) CreateNote(folderID, title string, now int64) Note {
 	n := &Note{
 		ID:        newID(),
 		FolderID:  folderID,
@@ -201,10 +195,28 @@ func (s *store) CreateNote(folderID, title string, now int64) (Note, bool) {
 		UpdatedAt: now,
 		CreatedAt: now,
 	}
+	s.mu.Lock()
 	s.notes[n.ID] = n
 	s.mu.Unlock()
 	s.persist()
-	return *n, true
+	return *n
+}
+
+// MoveNote changes the folder of an existing note.
+// Returns the updated note and true, or zero value and false if the note doesn't exist.
+func (s *store) MoveNote(id, folderID string, now int64) (Note, bool) {
+	s.mu.Lock()
+	n, ok := s.notes[id]
+	if !ok {
+		s.mu.Unlock()
+		return Note{}, false
+	}
+	n.FolderID = folderID
+	n.UpdatedAt = now
+	cp := *n
+	s.mu.Unlock()
+	s.persist()
+	return cp, true
 }
 
 // UpdateNote updates title and content of an existing note using last-write-wins.

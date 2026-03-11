@@ -18,6 +18,14 @@ final class NotesViewModel: ObservableObject {
     @Published var editingContent: String = ""
     @Published var editingTitle: String = ""
 
+    @Published var searchText: String = "" {
+        didSet {
+            if !searchText.isEmpty && selectedFolderID != Self.allNotesID {
+                selectedFolderID = Self.allNotesID
+            }
+        }
+    }
+
     @Published var isConnected: Bool = false
     @Published var serverAddress: String {
         didSet {
@@ -34,8 +42,17 @@ final class NotesViewModel: ObservableObject {
 
     var notesInSelectedFolder: [Note] {
         let sorted = notes.sorted { $0.updatedAt > $1.updatedAt }
-        guard let id = selectedFolderID, id != Self.allNotesID else { return sorted }
-        return sorted.filter { $0.folderID == id }
+        let folderFiltered: [Note]
+        if let id = selectedFolderID, id != Self.allNotesID {
+            folderFiltered = sorted.filter { $0.folderID == id }
+        } else {
+            folderFiltered = sorted
+        }
+        guard !searchText.isEmpty else { return folderFiltered }
+        let query = searchText.lowercased()
+        return folderFiltered.filter {
+            $0.title.lowercased().contains(query) || $0.content.lowercased().contains(query)
+        }
     }
 
     // MARK: - Private
@@ -165,6 +182,23 @@ final class NotesViewModel: ObservableObject {
                     }
                 }
 
+            case "note_moved":
+                if let n = msg.note,
+                   let idx = self.notes.firstIndex(where: { $0.id == n.id })
+                {
+                    self.notes[idx].folderID = n.folderID
+                    self.notes[idx].updatedAt = n.updatedAt
+                    // If we're viewing a specific folder and this note moved out, deselect it.
+                    let fid = self.selectedFolderID
+                    if fid != Self.allNotesID,
+                       let fid,
+                       n.folderID != fid,
+                       self.selectedNoteID == n.id
+                    {
+                        self.clearEditor()
+                    }
+                }
+
             case "note_deleted":
                 if let nid = msg.noteID {
                     self.notes.removeAll { $0.id == nid }
@@ -183,11 +217,6 @@ final class NotesViewModel: ObservableObject {
     /// Per note: last-write-wins by timestamp; push local if ahead.
     private func handleInit(serverFolders: [Folder], serverNotes: [Note]) {
         folders = serverFolders
-
-        // Bootstrap: create a default folder if the server has none yet.
-        if serverFolders.isEmpty {
-            syncService?.send(WSMsg(type: "create_folder", name: "Notes"))
-        }
 
         var serverMap = Dictionary(uniqueKeysWithValues: serverNotes.map { ($0.id, $0) })
         var merged: [Note] = []
@@ -272,8 +301,28 @@ final class NotesViewModel: ObservableObject {
     // MARK: - Note actions
 
     func createNote() {
-        guard let folderID = selectedFolderID, folderID != Self.allNotesID else { return }
+        guard selectedFolderID != nil else { return }
+        // When in "All Notes", create an unfoldered note (no folder_id sent).
+        let folderID: String? = (selectedFolderID == Self.allNotesID) ? nil : selectedFolderID
         syncService?.send(WSMsg(type: "create_note", folderID: folderID, title: ""))
+    }
+
+    func moveNote(id: String, toFolderID: String?) {
+        let folderID = toFolderID ?? ""
+        guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        notes[idx].folderID = folderID
+        notes[idx].updatedAt = now
+        // If viewing a specific folder and the note moved out of it, deselect.
+        if selectedFolderID != Self.allNotesID,
+           let fid = selectedFolderID,
+           folderID != fid,
+           selectedNoteID == id
+        {
+            clearEditor()
+        }
+        localStore.save(folders: folders, notes: notes)
+        syncService?.send(WSMsg(type: "move_note", folderID: folderID.isEmpty ? nil : folderID, noteID: id))
     }
 
     func deleteNote(id: String) {

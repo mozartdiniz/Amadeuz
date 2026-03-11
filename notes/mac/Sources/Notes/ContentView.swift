@@ -14,6 +14,7 @@ struct ContentView: View {
         } detail: {
             NoteEditor(vm: vm, showSettings: $showSettings)
         }
+        .searchable(text: $vm.searchText, placement: .toolbar, prompt: "Search notes")
         .sheet(isPresented: $showSettings) {
             SettingsView(serverAddress: $vm.serverAddress)
         }
@@ -106,8 +107,22 @@ private struct NoteList: View {
                 ContentUnavailableView("No Notes", systemImage: "note.text")
             } else {
                 List(vm.notesInSelectedFolder, selection: $vm.selectedNoteID) { note in
-                    NoteRow(note: note)
+                    NoteRow(note: note, folderName: vm.folders.first { $0.id == note.folderID }?.name)
                         .contextMenu {
+                            Menu("Move to Folder") {
+                                Button("No Folder") {
+                                    vm.moveNote(id: note.id, toFolderID: nil)
+                                }
+                                if !vm.folders.isEmpty {
+                                    Divider()
+                                    ForEach(vm.folders) { folder in
+                                        Button(folder.name) {
+                                            vm.moveNote(id: note.id, toFolderID: folder.id)
+                                        }
+                                    }
+                                }
+                            }
+                            Divider()
                             Button("Delete Note", role: .destructive) {
                                 vm.deleteNote(id: note.id)
                             }
@@ -134,8 +149,7 @@ private struct NoteList: View {
                 Button { vm.createNote() } label: {
                     Label("New Note", systemImage: "square.and.pencil")
                 }
-                .disabled(vm.selectedFolderID == nil
-                    || vm.selectedFolderID == NotesViewModel.allNotesID)
+                .disabled(vm.selectedFolderID == nil)
             }
         }
     }
@@ -145,6 +159,7 @@ private struct NoteList: View {
 
 private struct NoteRow: View {
     let note: Note
+    let folderName: String?
 
     private var displayTitle: String {
         note.title.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : note.title
@@ -182,6 +197,12 @@ private struct NoteRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+            if let folderName {
+                Label(folderName, systemImage: "folder")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
         .padding(.vertical, 3)
     }

@@ -25,8 +25,9 @@ type Note struct {
 //	create_folder  { name }
 //	rename_folder  { folder_id, name }
 //	delete_folder  { folder_id }
-//	create_note    { folder_id, title }
+//	create_note    { title }              — folder_id optional
 //	update_note    { note_id, title, content, updated_at }
+//	move_note      { note_id, folder_id } — folder_id empty = no folder
 //	delete_note    { note_id }
 //
 // Server → Client message types:
@@ -37,6 +38,7 @@ type Note struct {
 //	folder_deleted  { folder_id }               — broadcast after delete_folder
 //	note_created    { note }                    — sent to creator + broadcast
 //	note_updated    { note }                    — broadcast after accepted update_note
+//	note_moved      { note }                    — broadcast after move_note
 //	note_deleted    { note_id }                 — broadcast after delete_note
 type Msg struct {
 	Type string `json:"type"`

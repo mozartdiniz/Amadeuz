@@ -128,10 +128,7 @@ func TestCreateNote(t *testing.T) {
 	s := tempStore(t)
 	f := s.CreateFolder("Work", 1000)
 
-	n, ok := s.CreateNote(f.ID, "My Note", 2000)
-	if !ok {
-		t.Fatal("CreateNote returned false for valid folder")
-	}
+	n := s.CreateNote(f.ID, "My Note", 2000)
 	if n.ID == "" {
 		t.Fatal("expected non-empty ID")
 	}
@@ -149,23 +146,27 @@ func TestCreateNote(t *testing.T) {
 	}
 }
 
-func TestCreateNoteInvalidFolder(t *testing.T) {
+func TestCreateNoteWithoutFolder(t *testing.T) {
 	s := tempStore(t)
-	_, ok := s.CreateNote("nonexistent-folder-id", "Note", 1000)
-	if ok {
-		t.Fatal("expected false for nonexistent folder")
+	n := s.CreateNote("", "Quick thought", 1000)
+
+	if n.ID == "" {
+		t.Fatal("expected non-empty ID")
+	}
+	if n.FolderID != "" {
+		t.Fatalf("expected empty folder_id, got %q", n.FolderID)
 	}
 
 	notes := s.GetNotes()
-	if len(notes) != 0 {
-		t.Fatalf("expected 0 notes, got %d", len(notes))
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 note, got %d", len(notes))
 	}
 }
 
 func TestUpdateNote(t *testing.T) {
 	s := tempStore(t)
 	f := s.CreateFolder("Work", 1000)
-	n, _ := s.CreateNote(f.ID, "Draft", 2000)
+	n := s.CreateNote(f.ID, "Draft", 2000)
 
 	updated, ok := s.UpdateNote(n.ID, "Final Title", "Hello, world!", 3000)
 	if !ok {
@@ -188,7 +189,7 @@ func TestUpdateNote(t *testing.T) {
 func TestUpdateNoteRejectsStalerTimestamp(t *testing.T) {
 	s := tempStore(t)
 	f := s.CreateFolder("Work", 1000)
-	n, _ := s.CreateNote(f.ID, "Note", 5000)
+	n := s.CreateNote(f.ID, "Note", 5000)
 
 	// Attempt to update with an older timestamp — should be rejected.
 	_, ok := s.UpdateNote(n.ID, "Overwrite", "Should not stick", 4000)
@@ -210,7 +211,7 @@ func TestUpdateNoteRejectsStalerTimestamp(t *testing.T) {
 func TestUpdateNoteRejectsSameTimestamp(t *testing.T) {
 	s := tempStore(t)
 	f := s.CreateFolder("Work", 1000)
-	n, _ := s.CreateNote(f.ID, "Note", 2000)
+	n := s.CreateNote(f.ID, "Note", 2000)
 
 	// First update succeeds.
 	s.UpdateNote(n.ID, "Title", "Content", 3000)
@@ -233,7 +234,7 @@ func TestUpdateNoteNotFound(t *testing.T) {
 func TestDeleteNote(t *testing.T) {
 	s := tempStore(t)
 	f := s.CreateFolder("Work", 1000)
-	n, _ := s.CreateNote(f.ID, "Note", 2000)
+	n := s.CreateNote(f.ID, "Note", 2000)
 
 	ok := s.DeleteNote(n.ID)
 	if !ok {
@@ -277,7 +278,7 @@ func TestPersistAndReload(t *testing.T) {
 	// Build initial state.
 	s1 := newStore(path)
 	f := s1.CreateFolder("Work", 1000)
-	n, _ := s1.CreateNote(f.ID, "Meeting notes", 2000)
+	n := s1.CreateNote(f.ID, "Meeting notes", 2000)
 	s1.UpdateNote(n.ID, "Meeting notes", "Action items: ...", 3000)
 
 	// Force synchronous persist to ensure file is written before reload.
@@ -347,8 +348,8 @@ func TestUniqueIDs(t *testing.T) {
 	s := tempStore(t)
 	f := s.CreateFolder("Work", 1000)
 
-	n1, _ := s.CreateNote(f.ID, "Note 1", 2000)
-	n2, _ := s.CreateNote(f.ID, "Note 2", 3000)
+	n1 := s.CreateNote(f.ID, "Note 1", 2000)
+	n2 := s.CreateNote(f.ID, "Note 2", 3000)
 
 	if n1.ID == n2.ID {
 		t.Fatal("two notes should not share the same ID")

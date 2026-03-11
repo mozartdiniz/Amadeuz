@@ -108,15 +108,22 @@ func (h *hub) handle(conn *websocket.Conn, msg Msg) {
 		h.broadcast(resp, conn)
 
 	case "create_note":
-		if msg.FolderID == "" {
+		n := h.store.CreateNote(msg.FolderID, msg.Title, now)
+		resp := Msg{Type: "note_created", Note: &n}
+		log.Printf("note created: %q (%s) folder=%q", n.Title, n.ID, n.FolderID)
+		send(conn, resp)
+		h.broadcast(resp, conn)
+
+	case "move_note":
+		if msg.NoteID == "" {
 			return
 		}
-		n, ok := h.store.CreateNote(msg.FolderID, msg.Title, now)
+		n, ok := h.store.MoveNote(msg.NoteID, msg.FolderID, now)
 		if !ok {
 			return
 		}
-		resp := Msg{Type: "note_created", Note: &n}
-		log.Printf("note created: %q (%s) in folder %s", n.Title, n.ID, n.FolderID)
+		resp := Msg{Type: "note_moved", Note: &n}
+		log.Printf("note moved: %s to folder %q", n.ID, n.FolderID)
 		send(conn, resp)
 		h.broadcast(resp, conn)
 
