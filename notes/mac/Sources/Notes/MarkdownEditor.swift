@@ -116,6 +116,7 @@ final class MarkdownTextView: NSTextView {
         textStorage?.insert(attString(for: att), at: insertPos)
         setSelectedRange(NSRange(location: insertPos + 1, length: 0))
         restoreTypingAttributes()
+        applyMarkdownStyling()
         afterChange?()
     }
 
@@ -129,6 +130,7 @@ final class MarkdownTextView: NSTextView {
             stop.pointee = true
         }
         restoreTypingAttributes()
+        applyMarkdownStyling()
         afterChange?()
     }
 
@@ -139,6 +141,7 @@ final class MarkdownTextView: NSTextView {
             storage.deleteCharacters(in: range)
             stop.pointee = true
         }
+        applyMarkdownStyling()
         afterChange?()
     }
 
@@ -200,6 +203,100 @@ final class MarkdownTextView: NSTextView {
         var attrs = typingAttributes
         attrs[.foregroundColor] = NSColor.labelColor
         typingAttributes = attrs
+    }
+
+    // MARK: - Markdown styling
+
+    /// Re-applies visual Markdown styles (headings, bullets, checkboxes) to the text storage.
+    /// Only adds display attributes — never changes the underlying characters, so
+    /// extractMarkdown() always returns the plain Markdown string unchanged.
+    func applyMarkdownStyling() {
+        guard let storage = textStorage, storage.length > 0 else { return }
+        let nsStr = storage.string as NSString
+        let full  = NSRange(location: 0, length: storage.length)
+
+        // Collect attachment ranges before any mutation to avoid re-entrancy issues.
+        var attachmentRanges: [NSRange] = []
+        storage.enumerateAttribute(.attachment, in: full, options: []) { att, range, _ in
+            if att != nil { attachmentRanges.append(range) }
+        }
+
+        storage.beginEditing()
+
+        // Reset all characters to the base style.
+        let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        storage.addAttribute(.font, value: baseFont, range: full)
+        storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: full)
+        storage.removeAttribute(.strikethroughStyle, range: full)
+
+        // Restore foregroundColor on attachments (required for correct typingAttributes).
+        for range in attachmentRanges {
+            storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
+        }
+
+        // Apply per-line styles.
+        nsStr.enumerateSubstrings(in: full, options: .byLines) { [weak self] _, lineRange, _, _ in
+            guard let self, lineRange.length > 0 else { return }
+            self.applyLineStyle(nsStr.substring(with: lineRange), range: lineRange, in: storage)
+        }
+
+        storage.endEditing()
+    }
+
+    private func applyLineStyle(_ line: String, range: NSRange, in storage: NSTextStorage) {
+        // Returns a range clamped to the line, starting at the line's origin.
+        func prefix(_ n: Int) -> NSRange {
+            NSRange(location: range.location, length: min(n, range.length))
+        }
+        // Returns the sub-range after `offset` characters from the line start.
+        func from(_ offset: Int) -> NSRange {
+            let len = range.length - offset
+            guard len > 0 else { return NSRange(location: range.location + offset, length: 0) }
+            return NSRange(location: range.location + offset, length: len)
+        }
+
+        if line.hasPrefix("### ") {
+            storage.addAttribute(.font,
+                value: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize + 2), range: range)
+            storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: prefix(4))
+
+        } else if line.hasPrefix("## ") {
+            storage.addAttribute(.font,
+                value: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize + 5), range: range)
+            storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: prefix(3))
+
+        } else if line.hasPrefix("# ") {
+            storage.addAttribute(.font,
+                value: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize + 9), range: range)
+            storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: prefix(2))
+
+        } else if line.hasPrefix("- [x]") {
+            // Checked item: dim the bullet, green checkbox, strikethrough on the text.
+            storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: prefix(2))
+            let checkLen = min(3, range.length - 2)
+            if checkLen > 0 {
+                storage.addAttribute(.foregroundColor, value: NSColor.systemGreen,
+                    range: NSRange(location: range.location + 2, length: checkLen))
+            }
+            let rest = from(5)
+            if rest.length > 0 {
+                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: rest)
+                storage.addAttribute(.strikethroughStyle,
+                    value: NSUnderlineStyle.single.rawValue, range: rest)
+            }
+
+        } else if line.hasPrefix("- [ ]") {
+            // Unchecked item: dim the bullet, secondary color for the checkbox.
+            storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: prefix(2))
+            let checkLen = min(3, range.length - 2)
+            if checkLen > 0 {
+                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor,
+                    range: NSRange(location: range.location + 2, length: checkLen))
+            }
+
+        } else if line.hasPrefix("- ") {
+            storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: prefix(2))
+        }
     }
 
     private func fullRange(of storage: NSTextStorage) -> NSRange {
@@ -278,6 +375,7 @@ struct MarkdownEditor: NSViewRepresentable {
             let md = tv.extractMarkdown()
             lastMarkdown = md
             parent.markdown = md
+            tv.applyMarkdownStyling()
         }
 
         func load(_ md: String, into tv: MarkdownTextView) {
@@ -286,6 +384,7 @@ struct MarkdownEditor: NSViewRepresentable {
                 tv?.applyImage(image, forBlobID: id)
             }
             tv.textStorage?.setAttributedString(attrStr)
+            tv.applyMarkdownStyling()
         }
     }
 }
