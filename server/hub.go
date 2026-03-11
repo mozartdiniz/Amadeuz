@@ -76,7 +76,7 @@ func (h *hub) handle(conn *websocket.Conn, msg Msg) {
 		if msg.Name == "" {
 			return
 		}
-		f := h.store.CreateFolder(msg.Name, now)
+		f := h.store.CreateFolder(msg.FolderID, msg.Name, now)
 		resp := Msg{Type: "folder_created", Folder: &f}
 		log.Printf("folder created: %q (%s)", f.Name, f.ID)
 		send(conn, resp)
@@ -108,7 +108,7 @@ func (h *hub) handle(conn *websocket.Conn, msg Msg) {
 		h.broadcast(resp, conn)
 
 	case "create_note":
-		n := h.store.CreateNote(msg.FolderID, msg.Title, now)
+		n := h.store.CreateNote(msg.NoteID, msg.FolderID, msg.Title, msg.Content, msg.UpdatedAt, now)
 		resp := Msg{Type: "note_created", Note: &n}
 		log.Printf("note created: %q (%s) folder=%q", n.Title, n.ID, n.FolderID)
 		send(conn, resp)

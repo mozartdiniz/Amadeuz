@@ -197,12 +197,10 @@ private struct NoteRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
-            if let folderName {
-                Label(folderName, systemImage: "folder")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
+            Label(folderName ?? "—", systemImage: "folder")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
         }
         .padding(.vertical, 3)
     }

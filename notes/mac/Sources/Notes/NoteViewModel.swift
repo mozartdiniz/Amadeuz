@@ -213,10 +213,17 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    /// On reconnect: server state is authoritative for folders.
-    /// Per note: last-write-wins by timestamp; push local if ahead.
+    /// On reconnect: merge local and server state.
+    /// Folders: server is authoritative; local-only folders are pushed to server.
+    /// Notes: last-write-wins by timestamp; local-only notes are pushed to server.
     private func handleInit(serverFolders: [Folder], serverNotes: [Note]) {
-        folders = serverFolders
+        // Merge folders: keep server state, push any local-only folders.
+        let serverFolderIDs = Set(serverFolders.map { $0.id })
+        let localOnlyFolders = folders.filter { !serverFolderIDs.contains($0.id) }
+        folders = serverFolders + localOnlyFolders
+        for folder in localOnlyFolders {
+            syncService?.send(WSMsg(type: "create_folder", folderID: folder.id, name: folder.name))
+        }
 
         var serverMap = Dictionary(uniqueKeysWithValues: serverNotes.map { ($0.id, $0) })
         var merged: [Note] = []
@@ -236,8 +243,18 @@ final class NotesViewModel: ObservableObject {
                 } else {
                     merged.append(serverNote)
                 }
+            } else {
+                // Local-only note (created offline): push to server and keep.
+                merged.append(localNote)
+                syncService?.send(WSMsg(
+                    type: "create_note",
+                    folderID: localNote.folderID.isEmpty ? nil : localNote.folderID,
+                    noteID: localNote.id,
+                    title: localNote.title,
+                    content: localNote.content,
+                    updatedAt: localNote.updatedAt
+                ))
             }
-            // Local-only notes (created offline without server confirmation): dropped.
         }
 
         // Notes only on server (from other clients): add them.
@@ -276,7 +293,11 @@ final class NotesViewModel: ObservableObject {
     // MARK: - Folder actions
 
     func createFolder(name: String) {
-        syncService?.send(WSMsg(type: "create_folder", name: name))
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let folder = Folder(id: UUID().uuidString.lowercased(), name: name, createdAt: now)
+        folders.append(folder)
+        localStore.save(folders: folders, notes: notes)
+        syncService?.send(WSMsg(type: "create_folder", folderID: folder.id, name: name))
     }
 
     func renameFolder(id: String, name: String) {
@@ -302,9 +323,28 @@ final class NotesViewModel: ObservableObject {
 
     func createNote() {
         guard selectedFolderID != nil else { return }
-        // When in "All Notes", create an unfoldered note (no folder_id sent).
+        // When in "All Notes", create an unfoldered note.
         let folderID: String? = (selectedFolderID == Self.allNotesID) ? nil : selectedFolderID
-        syncService?.send(WSMsg(type: "create_note", folderID: folderID, title: ""))
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let note = Note(
+            id: UUID().uuidString.lowercased(),
+            folderID: folderID ?? "",
+            title: "",
+            content: "",
+            updatedAt: now,
+            createdAt: now
+        )
+        notes.append(note)
+        localStore.save(folders: folders, notes: notes)
+        // Flush whatever is currently in the editor before switching.
+        if let old = editingNoteID {
+            flushNote(id: old, title: editingTitle, content: editingContent)
+        }
+        // Load immediately — don't rely on onChange, which won't fire when the
+        // List is newly mounted (e.g. first note in a folder).
+        loadNoteIntoEditor(note)
+        selectedNoteID = note.id
+        syncService?.send(WSMsg(type: "create_note", folderID: folderID, noteID: note.id, title: ""))
     }
 
     func moveNote(id: String, toFolderID: String?) {

@@ -128,8 +128,12 @@ func (s *store) GetFolders() []Folder {
 }
 
 // CreateFolder adds a new folder and returns it.
-func (s *store) CreateFolder(name string, now int64) Folder {
-	f := &Folder{ID: newID(), Name: name, CreatedAt: now}
+// If id is empty, a new one is generated.
+func (s *store) CreateFolder(id, name string, now int64) Folder {
+	if id == "" {
+		id = newID()
+	}
+	f := &Folder{ID: id, Name: name, CreatedAt: now}
 	s.mu.Lock()
 	s.folders[f.ID] = f
 	s.mu.Unlock()
@@ -185,14 +189,22 @@ func (s *store) GetNotes() []Note {
 	return result
 }
 
-// CreateNote adds a new empty note. folderID may be empty for an unfoldered note.
-func (s *store) CreateNote(folderID, title string, now int64) Note {
+// CreateNote adds a new note. folderID may be empty for an unfoldered note.
+// If id is empty, a new one is generated.
+// If updatedAt is 0, now is used.
+func (s *store) CreateNote(id, folderID, title, content string, updatedAt, now int64) Note {
+	if id == "" {
+		id = newID()
+	}
+	if updatedAt == 0 {
+		updatedAt = now
+	}
 	n := &Note{
-		ID:        newID(),
+		ID:        id,
 		FolderID:  folderID,
 		Title:     title,
-		Content:   "",
-		UpdatedAt: now,
+		Content:   content,
+		UpdatedAt: updatedAt,
 		CreatedAt: now,
 	}
 	s.mu.Lock()
