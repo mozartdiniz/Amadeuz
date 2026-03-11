@@ -8,11 +8,14 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK4      REQUIRED IMPORTED_TARGET gtk4)
 pkg_check_modules(SOUP3     REQUIRED IMPORTED_TARGET libsoup-3.0)
 pkg_check_modules(JSON_GLIB REQUIRED IMPORTED_TARGET json-glib-1.0)
+pkg_check_modules(SECRET    REQUIRED IMPORTED_TARGET libsecret-1)
 
 add_executable(amadeuz
     src/main.cpp
     src/local_store.cpp
-    src/sync_service.cpp
+    src/keyring_store.cpp
+    src/api_client.cpp
+    src/note_sync.cpp
     src/note_view_model.cpp
     src/main_window.cpp
 )
@@ -21,6 +24,7 @@ target_link_libraries(amadeuz PRIVATE
     PkgConfig::GTK4
     PkgConfig::SOUP3
     PkgConfig::JSON_GLIB
+    PkgConfig::SECRET
 )
 
 target_include_directories(amadeuz PRIVATE src)

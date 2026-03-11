@@ -1645,3 +1645,69 @@ Phase 2a is complete on server and macOS:
 - All 25 server integration tests passing
 
 The other platforms (Windows, Linux, iOS, Android) still use the Phase 2b architecture — single WS endpoint, no auth. Phase 2a parity for those platforms is the next major milestone before Phase 2c (E2E encryption) can begin.
+
+---
+
+## March 11, 2026 — Linux Phase 2a polish: inline images, auto-login, and list order
+
+*(Same day, continued from the previous session which brought the Linux client to Phase 2a parity.)*
+
+### Three small sessions, three concrete improvements
+
+After Phase 2a landed on Linux — auth, REST CRUD, per-note WebSocket, search, move, Markdown — a few rough edges remained. This session addressed them.
+
+### Inline images: drag and drop
+
+The user tried dragging an image onto the note editor. The default GTK4 behaviour kicked in: the text view accepted the drop as a URI list and inserted the local file path as plain text. Not what anyone wants.
+
+The fix required three pieces working together:
+
+**1. Intercept the drop.** `GtkDropTarget` with `GDK_TYPE_FILE_LIST` attached to the `GtkTextView`. When the signal fires, check the MIME type via `g_file_query_info` — only accept `image/*`. Generate a UUID, copy the file to `~/.local/share/amadeuz/blobs/<uuid>`, then insert.
+
+**2. Display the image inline.** GTK4's mechanism for embedding arbitrary widgets in a text view is `GtkTextChildAnchor` — a placeholder in the `GtkTextBuffer` that renders a child widget at that position. The first instinct was `GtkImage`. The image came out microscopically small. The reason: `GtkImage` is designed for icons; it renders an icon paintable at its natural icon size, not at the pixel dimensions of an arbitrary image. Switching to `GtkPicture` (which is explicitly designed for displaying images, not icons) and adding `gtk_widget_set_size_request(img, disp_w, disp_h)` fixed it. `GtkPicture` renders the scaled pixbuf at exactly the requested dimensions.
+
+**3. Serialize back to Markdown.** The `content_` string stored in the database must be plain text — not binary data, not object replacement characters. A `blob_anchors_` map on `MainWindow` tracks each anchor → UUID. `cb_content_changed` iterates through the buffer character by character using `gtk_text_iter_get_child_anchor()`; when it hits an anchor, it emits `![](amadeuz://blob/<uuid>)` into the output string instead of the U+FFFC replacement character that `gtk_text_buffer_get_text` would normally produce.
+
+The reverse direction — loading a note that contains image references — uses `render_blob_images()`. It scans the buffer for `![](amadeuz://blob/...)` patterns using `gtk_text_iter_forward_search`, collects all matches, then processes them in **reverse offset order** so that earlier deletions don't invalidate later offsets. Each match is deleted and replaced with an inline image anchor.
+
+The whole round-trip — drop → save to disk → insert anchor → serialize as Markdown → reload → render inline — works correctly. Blobs are currently local-only; server upload (`PUT /blobs/:id`) will follow in a future session.
+
+> 📝 *Write here: this is the third time the same pattern has appeared in this project — client generates UUID, stores locally immediately, queues server upload for later. It started with notes and folders, repeated with blobs on macOS, and now again on Linux. Does the pattern feel obvious now, or is it still surprising each time how much simpler it makes the offline story?*
+
+### Auto-login was broken
+
+The user noticed they had to log in every time they opened the app, even though the macOS client remembered the session. The JWT was being stored in GNOME Keyring correctly. The bug was elsewhere.
+
+The `NotesViewModel` constructor is the first thing called in `MainWindow::MainWindow`. If a token is found in the keyring, the constructor calls `on_auth_state_(true, {})` synchronously — which triggers `show_main_page()`. But at that point in the constructor, `window_`, `root_stack_`, and every other widget pointer is still `nullptr`. The `gtk_stack_set_visible_child_name` call is a GTK assertion on a null pointer — a silent no-op.
+
+After the constructor returns, the widgets are built. `GtkStack` defaults to showing the first page added, which is "auth". The existing post-build check was one-sided:
+
+```cpp
+if (!vm_->is_logged_in()) {
+    // show auth page
+}
+```
+
+There was no `else` branch. The stack stayed on "auth" even when a valid token was loaded from the keyring.
+
+The fix is two lines: add `else { show_main_page(); }`. The lesson is broader: never rely on side effects from a constructor that fires before the UI exists. Always reconcile UI state explicitly after the widgets are built.
+
+### Note list row order
+
+The note rows were showing: title → folder name → content preview. The correct order, matching macOS, is: title → content preview → folder name. The folder label goes at the bottom because it is the least important piece of information in the row — you already know what folder you're looking at.
+
+This was a two-block swap in `make_note_row()` in `main_window.cpp`. The row height stays constant because the folder label always occupies a line (with opacity 0 and a space placeholder when there is no folder), regardless of order.
+
+### Where things stand
+
+The Linux client now has feature parity with macOS on every Phase 2a feature:
+
+- Auth (login / register / recover / sign out / auto-login via GNOME Keyring)
+- REST CRUD for folders and notes
+- Per-note WebSocket live sync
+- Offline-first (local state loads immediately, server is a background sync)
+- Search, move note, unfoldered notes
+- Markdown styling
+- Inline images (local blobs; server upload pending)
+
+> 📝 *Write here: the Linux client went from zero to feature parity with macOS in a single focused session (plus a polish session). How does that compare to the Windows client, which took longer? Is GTK4 easier to work with than you expected, or harder? What would you tell someone who is thinking about writing a GTK4 app in C++?*

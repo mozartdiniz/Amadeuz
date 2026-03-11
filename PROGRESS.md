@@ -37,21 +37,21 @@
 | Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Create / delete notes | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Note list with title, date, preview | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Unfoldered notes (folder optional) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Create note from "All Notes" view | — | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Move note between folders | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Folder label in note list row | — | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Search / filter notes | — | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Inline images in notes | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Unfoldered notes (folder optional) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Create note from "All Notes" view | — | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Move note between folders | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Folder label in note list row | — | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Search / filter notes | — | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Inline images in notes | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 | Offline blob queue (insert images offline) | — | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ❌ | ❌ | ❌ | ❌ |
-| User accounts / JWT auth | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Register / Login / Recover | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Recovery codes | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| JWT in platform credential store | — | ✅ | ❌ | ❌ | ❌ | ❌ |
-| REST CRUD API | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Per-note WebSocket (live sync) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Sign Out | — | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ❌ | ✅ | ❌ | ❌ |
+| User accounts / JWT auth | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Register / Login / Recover | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Recovery codes | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| JWT in platform credential store | — | ✅ | ❌ | ✅ | ❌ | ❌ |
+| REST CRUD API | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Per-note WebSocket (live sync) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Sign Out | — | ✅ | ❌ | ✅ | ❌ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
@@ -281,14 +281,14 @@ Default server: `ws://localhost:8080/ws`
 
 ## Linux (C++ + GTK4)
 
-**Status:** Phase 2b complete — folders + multiple notes, three-column layout
+**Status:** Phase 2a complete — user accounts, JWT auth, REST CRUD, per-note WebSocket, unfoldered notes, move note, search, Markdown styling, inline images
 **Location:** `notes/linux/`
 
 ### Build
 
 ```bash
 # Install dependencies (Ubuntu / Debian) — requires GTK 4.8+
-sudo apt install cmake build-essential libgtk-4-dev libsoup-3.0-dev libjson-glib-dev
+sudo apt install cmake build-essential libgtk-4-dev libsoup-3.0-dev libjson-glib-dev libsecret-1-dev
 
 # Configure + build
 cd notes/linux
@@ -300,15 +300,27 @@ cmake --build build
 ```
 
 ### What it does
+- Login / Register / Recover screen (shown before main UI)
+- Recovery code dialog displayed after register or recover
 - Three-column layout: folder sidebar | note list | note editor (via nested `GtkPaned`)
-- Create folders (dialog), rename/delete folders (right-click context menu on folder row)
+- Sign Out button in header bar
+- All CRUD (folders, notes) via REST; 500 ms debounced note content changes via REST PATCH
+- Per-note WebSocket opens when a note is selected — receives live updates from other clients
+- Full sync on login/reconnect: merges server state with local by last-write-wins, pushes any offline-created or locally-newer items
+- Offline-first: local state updated immediately; REST calls fire in background; full sync on reconnect catches up
+- JWT stored in GNOME Keyring (libsecret); survives app restart without re-login
+- Create folders (dialog), rename/delete folders (right-click context menu)
 - Create notes (toolbar button), delete notes (toolbar button + right-click context menu)
-- Note list sorted by `updated_at` descending, showing title, date, and content preview
-- "All Notes" virtual view shows all notes across all folders
-- Full offline-first: loads `data.json` on startup, works without server
-- Debounce: 500ms after last change to title or content → save locally + push to server
-- Per-note last-write-wins merge on reconnect (push local if ahead)
+- Move note between folders (right-click → "Move to…" submenu with all folders)
+- Unfoldered notes: creating from "All Notes" view creates note with no folder
+- Folder label shown on each note row when in "All Notes" view
+- Search bar in note list panel — filters by substring match on title + content
+- Markdown styling: `#`/`##`/`###` headers (bold + scaled), `- [x]` done checkboxes (strikethrough)
+- Inline images: drag any image onto the editor to insert it; stored as `![](amadeuz://blob/<uuid>)` in Markdown; rendered inline via `GtkTextChildAnchor` + `GtkPicture`; blobs saved locally under `~/.local/share/amadeuz/blobs/`
+- Note list sorted by `updated_at` descending, showing title, preview, then folder label
+- "All Notes" virtual view shows all notes across all folders (including unfoldered)
 - Auto-reconnect every 3 seconds; green/red status dot in `GtkHeaderBar`
+- Server URL format: `http://hostname:8080` (auto-migrates old `ws://` format)
 - Settings dialog for server URL (stored in `settings.json`)
 
 ### Local storage
@@ -317,37 +329,46 @@ cmake --build build
 { "folders": [...], "notes": [...] }
 ```
 
+### Blob storage
+`~/.local/share/amadeuz/blobs/<uuid>` (raw file, no extension). Blobs are written on drop and read back on note load.
+
 ### Settings storage
-`~/.local/share/amadeuz/settings.json` — JSON `{ "serverAddress": "ws://..." }`
-Default server: `ws://localhost:8080/ws`
+`~/.local/share/amadeuz/settings.json` — JSON `{ "serverAddress": "http://..." }`
+Default server: `http://localhost:8080`
 
 ### Dependencies
 | Library | Used for |
 |---------|----------|
-| `gtk4` (≥ 4.8) | Window, `GtkPaned`, `GtkListBox`, `GtkHeaderBar`, text view |
-| `libsoup-3.0` | WebSocket client (`SoupWebsocketConnection`) |
+| `gtk4` (≥ 4.8) | Window, `GtkPaned`, `GtkListBox`, `GtkHeaderBar`, text view, Markdown tags |
+| `libsoup-3.0` | REST HTTP (`soup_session_send_and_read_async`) + per-note WebSocket |
 | `json-glib-1.0` | JSON parse/generate |
+| `libsecret-1` | JWT storage in GNOME Keyring |
 
 ### Key files
 | File | Role |
 |------|------|
 | `src/main.cpp` | `GtkApplication` entry, `on_activate` signal |
-| `src/models.h` | `Folder`, `Note`, `WireMessage` structs |
-| `src/main_window.h/.cpp` | GTK4 window: nested `GtkPaned` 3-column layout, all signal handlers |
-| `src/note_view_model.h/.cpp` | `NotesViewModel` — state, selection, debounce, merge, CRUD |
-| `src/local_store.h/.cpp` | Read/write `data.json` (folders + notes) via json-glib |
-| `src/sync_service.h/.cpp` | libsoup-3 WebSocket client, full wire protocol, auto-reconnect |
+| `src/models.h` | `Folder`, `Note`, `AuthResponse`, `NoteWsMsg` structs |
+| `src/main_window.h/.cpp` | GTK4 window: auth page + 3-column main layout, all signal handlers |
+| `src/note_view_model.h/.cpp` | `NotesViewModel` — auth state, `full_sync()`, REST CRUD, per-note WS lifecycle |
+| `src/api_client.h/.cpp` | All REST calls (`SoupSession` async); `AuthCb` / `ObjCb` / `BoolCb` callbacks |
+| `src/note_sync.h/.cpp` | Per-note WebSocket (`NoteSync`) — receives init/update, sends update, auto-reconnect |
+| `src/local_store.h/.cpp` | Read/write `data.json` (folders + notes); auto-migrates old `ws://` server URL |
+| `src/keyring_store.h/.cpp` | Save/load/clear JWT in GNOME Keyring via libsecret |
 
 ### Architecture notes
 - All callbacks (libsoup + GTK) fire on the GLib main thread — no explicit thread marshaling needed
 - Debounce uses `g_timeout_add(500, ...)` / `g_source_remove()` for cancel-and-restart
-- Reconnect uses `g_timeout_add_seconds(3, ...)`
+- Per-note WS reconnect uses `g_timeout_add_seconds(3, ...)`; destroyed on note deselect
 - Four `suppress_*` flags on `MainWindow` prevent feedback loops when programmatically updating widgets
 - `GtkListBox` cleared and rebuilt on every folder/note change (simple + correct for this scale)
 - Right-click context menus use `GtkGestureClick` (button=3) + `GtkPopover` attached to the row
-- `GtkStack` switches editor between "empty" page ("Select a note") and "editor" page
+- `GtkStack` at root level: "auth" page | "main" page (switched on login/logout)
+- `GtkStack` switches editor between "empty" ("Select a note") and "editor" pages
 - `gtk_list_box_set_header_func` adds a "Folders" section header in the folder sidebar
-- Selection restore after list rebuild: suppress signals → rebuild → call `gtk_list_box_select_row`
+- Markdown styling via `GtkTextTag` on `GtkTextBuffer`; applied per-line on keystroke, full-buffer on note load
+- Move note submenu: a second `GtkPopover` parented to same row, shown after "Move to…" is clicked
+- Server URL auto-migration: `ws://host/ws` → `http://host` on first load of old settings
 
 ---
 

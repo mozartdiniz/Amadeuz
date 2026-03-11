@@ -54,6 +54,23 @@ void add_note_to_builder(JsonBuilder* b, const Note& n) {
     json_builder_end_object(b);
 }
 
+// Migrate old ws://host/ws format → http://host
+std::string migrate_address(const std::string& addr) {
+    if (addr.size() >= 5 && addr.substr(0, 5) == "ws://") {
+        std::string host = addr.substr(5);
+        if (host.size() >= 3 && host.substr(host.size() - 3) == "/ws")
+            host = host.substr(0, host.size() - 3);
+        return "http://" + host;
+    }
+    if (addr.size() >= 6 && addr.substr(0, 6) == "wss://") {
+        std::string host = addr.substr(6);
+        if (host.size() >= 3 && host.substr(host.size() - 3) == "/ws")
+            host = host.substr(0, host.size() - 3);
+        return "https://" + host;
+    }
+    return addr;
+}
+
 } // namespace
 
 // ── LocalStore ────────────────────────────────────────────────────────────────
@@ -132,9 +149,12 @@ void LocalStore::save(const std::vector<Folder>& folders, const std::vector<Note
     json_generator_set_root(gen, node);
     gchar* str = json_generator_to_data(gen, nullptr);
 
+    // Atomic write via temp file
+    std::string tmp = data_path_ + ".tmp";
     GError* error = nullptr;
-    g_file_set_contents(data_path_.c_str(), str, -1, &error);
+    g_file_set_contents(tmp.c_str(), str, -1, &error);
     g_clear_error(&error);
+    rename(tmp.c_str(), data_path_.c_str());
 
     g_free(str);
     g_object_unref(gen);
@@ -143,7 +163,7 @@ void LocalStore::save(const std::vector<Folder>& folders, const std::vector<Note
 }
 
 std::string LocalStore::load_server_address() const {
-    static constexpr const char* DEFAULT = "ws://localhost:8080/ws";
+    static constexpr const char* DEFAULT = "http://localhost:8080";
 
     GError* error  = nullptr;
     gchar*  raw    = nullptr;
@@ -162,7 +182,7 @@ std::string LocalStore::load_server_address() const {
         if (root && JSON_NODE_HOLDS_OBJECT(root)) {
             JsonObject* obj = json_node_get_object(root);
             if (json_object_has_member(obj, "serverAddress"))
-                result = json_object_get_string_member(obj, "serverAddress");
+                result = migrate_address(json_object_get_string_member(obj, "serverAddress"));
         }
     }
 
