@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -23,8 +22,8 @@ func newBlobStore(dir string) *blobStore {
 	return &blobStore{dir: dir}
 }
 
-// validBlobID returns true if s contains only lowercase hex digits and hyphens,
-// matching the output format of newID(). Prevents path traversal attacks.
+// validBlobID returns true if s contains only lowercase hex digits and hyphens.
+// Matches both newID() output and standard UUID format (client-generated IDs).
 func validBlobID(s string) bool {
 	if s == "" || len(s) > 40 {
 		return false
@@ -37,12 +36,35 @@ func validBlobID(s string) bool {
 	return true
 }
 
-// Upload handles POST /blobs — stores the raw body as a new blob and returns its ID.
-func (bs *blobStore) Upload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+// HandleBlob dispatches GET (download) and PUT (upload) for /blobs/:id.
+func (bs *blobStore) HandleBlob(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		bs.download(w, r)
+	case http.MethodPut:
+		bs.upload(w, r)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// upload handles PUT /blobs/:id — client provides the blob ID.
+// Idempotent: if the blob already exists, returns 200 without re-writing.
+func (bs *blobStore) upload(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/blobs/")
+	if !validBlobID(id) {
+		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
+
+	path := filepath.Join(bs.dir, id)
+
+	// Already exists — idempotent success (handles retry after partial failure).
+	if _, err := os.Stat(path); err == nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxBlobBytes)
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -53,23 +75,18 @@ func (bs *blobStore) Upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "empty body", http.StatusBadRequest)
 		return
 	}
-	id := newID()
-	if err := os.WriteFile(filepath.Join(bs.dir, id), data, 0o644); err != nil {
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		log.Printf("blobStore: write %s: %v", id, err)
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	log.Printf("blob stored: %s (%d bytes)", id, len(data))
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"id":%q}`, id)
+	w.WriteHeader(http.StatusCreated)
 }
 
-// Download handles GET /blobs/:id — serves the blob with detected content-type.
-func (bs *blobStore) Download(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// download handles GET /blobs/:id — serves the blob with detected content-type.
+func (bs *blobStore) download(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/blobs/")
 	if !validBlobID(id) {
 		http.Error(w, "invalid id", http.StatusBadRequest)

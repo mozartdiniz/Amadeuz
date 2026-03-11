@@ -124,7 +124,12 @@ final class NotesViewModel: ObservableObject {
             url: url,
             onMessage: { [weak self] msg in self?.handleMessage(msg) },
             onConnectionChange: { [weak self] connected in
-                DispatchQueue.main.async { self?.isConnected = connected }
+                DispatchQueue.main.async {
+                    self?.isConnected = connected
+                    if connected {
+                        Task { await self?.blobStore.uploadPending() }
+                    }
+                }
             }
         )
     }
@@ -278,8 +283,10 @@ final class NotesViewModel: ObservableObject {
 
     /// Called when the note list selection changes.
     func noteSelectionChanged(from oldID: String?, to newID: String?) {
-        // Flush any unsaved changes to the outgoing note immediately.
-        if let old = oldID {
+        // Only flush if the editor is still showing the old note.
+        // If createNote() already called loadNoteIntoEditor() before setting selectedNoteID,
+        // editingNoteID will be the new note — flushing now would overwrite with empty content.
+        if let old = oldID, old == editingNoteID {
             flushNote(id: old, title: editingTitle, content: editingContent)
         }
         loadNoteIntoEditor(newID.flatMap { id in notes.first { $0.id == id } })

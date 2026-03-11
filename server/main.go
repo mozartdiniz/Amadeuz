@@ -17,8 +17,7 @@ func main() {
 	h := newHub(s)
 	bs := newBlobStore("blobs")
 
-	http.HandleFunc("/blobs/", bs.Download)
-	http.HandleFunc("/blobs", bs.Upload)
+	http.HandleFunc("/blobs/", bs.HandleBlob)
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)

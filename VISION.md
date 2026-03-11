@@ -213,15 +213,13 @@ amadeuz/
     │   ├── Package.swift
     │   └── Sources/Notes/
     │       ├── NoteApp.swift
-    │       ├── AuthService.swift    ← JWT + Keychain
-    │       ├── LoginView.swift
-    │       ├── NoteListView.swift   ← sidebar: folders + notes
-    │       ├── NoteEditorView.swift ← text editor (was ContentView)
-    │       ├── NoteListViewModel.swift
-    │       ├── NoteEditorViewModel.swift
-    │       ├── LocalStore.swift     ← directory-based, per-note files
-    │       ├── SyncService.swift    ← WS to /notes/{id}/ws?token=<jwt>
-    │       └── CryptoService.swift  ← X25519 keypair, AES-GCM, key wrap
+    │       ├── Models.swift         ← Folder, Note, WSMsg types
+    │       ├── ContentView.swift    ← NavigationSplitView, sidebar, note list, editor
+    │       ├── NoteViewModel.swift  ← state, selection, debounce, sync, CRUD
+    │       ├── MarkdownEditor.swift ← NSTextView-based rich editor (Markdown + inline images)
+    │       ├── BlobStore.swift      ← local blob cache, pending upload queue, HTTP sync
+    │       ├── LocalStore.swift     ← read/write data.json
+    │       └── SyncService.swift    ← URLSessionWebSocketTask wrapper, auto-reconnect
     ├── windows/         ← Windows (C# + WinUI 3)
     ├── linux/           ← Linux (C++ + GTK4)
     └── ios/             ← iOS (Swift + SwiftUI)
@@ -322,3 +320,9 @@ HTTPS/WSS, dynamic DNS or relay service, proper packaging (`.app`, `.msix`, `.de
 | Client-generated IDs for offline creation | Notes and folders are created locally with a UUID generated on the client. The entity appears in the UI immediately and is saved to disk. The ID is included in the `create_folder`/`create_note` message sent to the server. The server uses the client-provided ID if present, generates one otherwise. On reconnect, `handleInit` pushes any local-only entities to the server using those same IDs — no conflicts, no dropped data. The alternative (server-generated IDs) required a round-trip to the server before the entity could appear, making offline creation impossible. |
 | Row height fixed by always showing folder label | When a note has no folder, hiding the folder label row caused the list row to be shorter. Moving the note to a folder made the label appear — but SwiftUI caches row heights and would crop the newly visible label. Fixed by always rendering the label and showing "—" when there is no folder. Constant height, no caching surprise. |
 | `loadNoteIntoEditor` called directly in `createNote`, not via `onChange` | SwiftUI's `onChange(of:)` only fires when the observed value changes while the view is already in the hierarchy. When `notesInSelectedFolder` was empty (no notes in the folder), the `List` was replaced by `ContentUnavailableView`. Creating the first note made both the `List` and its selection appear in the same render cycle — `onChange` never fired, the editor was never loaded, and it showed the previous note's content. Fix: call `loadNoteIntoEditor` synchronously in `createNote()` before setting `selectedNoteID`. `onChange` remains as a secondary trigger for user-driven selection changes and is idempotent when called twice. |
+| Markdown as note content format, with `amadeuz://blob/uuid` for images | Note content is plain Markdown text. Images are referenced as `![](amadeuz://blob/<uuid>)` — a custom URI scheme that identifies a blob by its UUID. This keeps notes as plain strings (easy to persist, sync, and search), while the blob store handles the binary data separately. Base64 embedding was rejected (inflates note size, breaks WebSocket framing for large images). A block-level document model (like NSTextStorage-native) was rejected (too complex for cross-platform parity). |
+| Client-generated blob IDs, `PUT /blobs/:id` (idempotent) | Images follow the same offline-first pattern as notes and folders: the client generates a UUID, saves the blob to local disk immediately, inserts the image into the note with the final ID, and queues the blob for upload. On reconnect, `uploadPending()` flushes the queue via `PUT /blobs/:id`. The server accepts a client-provided ID and is idempotent — if the blob already exists, it returns 200 without re-writing. This makes retries after partial failure safe. |
+| Pending blob queue persisted to `pending_blobs.json` | The set of blob IDs not yet uploaded to the server is persisted to disk alongside the blob cache. If the app restarts while offline, the pending set survives and `uploadPending()` is called again on the next reconnect. The pattern mirrors the note/folder offline-first design. |
+| `noteSelectionChanged` guards `old == editingNoteID` before flushing | `createNote()` calls `loadNoteIntoEditor(newNote)` (setting `editingNoteID` to the new note) before setting `selectedNoteID`. SwiftUI's `onChange` then fires `noteSelectionChanged(from: oldNoteID, to: newNoteID)`. Without a guard, this would call `flushNote(oldNoteID, "", "")` — overwriting the old note's content with empty string — because the editor's `editingTitle`/`editingContent` had already been cleared by `loadNoteIntoEditor`. The guard `old == editingNoteID` makes the flush conditional on the editor still displaying the old note, which it no longer is after `loadNoteIntoEditor` has run. |
+| Markdown styling via NSTextStorage attribute manipulation, not content mutation | `applyMarkdownStyling()` adds visual attributes (font size, color, strikethrough) to the `NSTextStorage` without changing the underlying characters. `extractMarkdown()` serialises only `.attachment` attributes — it ignores all visual attributes. This means the Markdown string round-trips cleanly regardless of styling applied, and there is no risk of styling code corrupting note content. |
+| Per-keystroke styling scoped to current paragraph only | Calling `addAttribute` over the full document range on every keystroke causes `NSLayoutManager` to invalidate the entire layout, which forces a scroll jump as the layout reflows. Fix: `applyMarkdownStylingForCurrentLine()` computes `paragraphRange(for: cursorPosition)` and invalidates only that range. Full-document styling (`applyMarkdownStyling()`) is reserved for note load and paste operations where a full pass is correct. |

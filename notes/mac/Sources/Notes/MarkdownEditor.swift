@@ -90,23 +90,17 @@ final class MarkdownTextView: NSTextView {
     // MARK: - Image Insertion
 
     func insertBlobData(_ data: Data) {
-        guard let store = blobStore else { return }
+        guard let store = blobStore,
+              let id = try? store.save(data),
+              let image = NSImage(data: data) else { return }
 
-        // Insert a placeholder attachment immediately so the user sees feedback.
-        let tempID = UUID().uuidString.lowercased()
-        let placeholder = BlobAttachment(blobID: tempID)
-        placeholder.image = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
-        insertAttachment(placeholder)
+        // Image is already cached locally — insert with final ID immediately.
+        // Works fully offline; upload happens in background and is retried on reconnect.
+        let att = BlobAttachment(blobID: id)
+        att.apply(image: image)
+        insertAttachment(att)
 
-        Task { @MainActor in
-            do {
-                let realID = try await store.upload(data)
-                let image = NSImage(data: data)
-                replaceAttachment(tempID: tempID, realID: realID, image: image)
-            } catch {
-                removeAttachment(id: tempID)
-            }
-        }
+        Task { @MainActor in try? await store.upload(id: id) }
     }
 
     // MARK: - Attachment manipulation
@@ -115,20 +109,6 @@ final class MarkdownTextView: NSTextView {
         let insertPos = selectedRange().location
         textStorage?.insert(attString(for: att), at: insertPos)
         setSelectedRange(NSRange(location: insertPos + 1, length: 0))
-        restoreTypingAttributes()
-        applyMarkdownStyling()
-        afterChange?()
-    }
-
-    func replaceAttachment(tempID: String, realID: String, image: NSImage?) {
-        guard let storage = textStorage else { return }
-        storage.enumerateAttribute(.attachment, in: fullRange(of: storage)) { val, range, stop in
-            guard let a = val as? BlobAttachment, a.blobID == tempID else { return }
-            let newAtt = BlobAttachment(blobID: realID)
-            if let img = image { newAtt.apply(image: img) }
-            storage.replaceCharacters(in: range, with: attString(for: newAtt))
-            stop.pointee = true
-        }
         restoreTypingAttributes()
         applyMarkdownStyling()
         afterChange?()
@@ -207,9 +187,44 @@ final class MarkdownTextView: NSTextView {
 
     // MARK: - Markdown styling
 
-    /// Re-applies visual Markdown styles (headings, bullets, checkboxes) to the text storage.
-    /// Only adds display attributes — never changes the underlying characters, so
-    /// extractMarkdown() always returns the plain Markdown string unchanged.
+    /// Fast path: re-styles only the paragraph containing the cursor.
+    /// Called on every keystroke — avoids full-document layout invalidation.
+    func applyMarkdownStylingForCurrentLine() {
+        guard let storage = textStorage, storage.length > 0 else { return }
+        let cursor  = min(selectedRange().location, storage.length - 1)
+        let nsStr   = storage.string as NSString
+        let paraRange = nsStr.paragraphRange(for: NSRange(location: cursor, length: 0))
+        guard paraRange.length > 0 else { return }
+
+        var attachmentRanges: [NSRange] = []
+        storage.enumerateAttribute(.attachment, in: paraRange, options: []) { att, range, _ in
+            if att != nil { attachmentRanges.append(range) }
+        }
+
+        storage.beginEditing()
+
+        let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        storage.addAttribute(.font, value: baseFont, range: paraRange)
+        storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: paraRange)
+        storage.removeAttribute(.strikethroughStyle, range: paraRange)
+        for range in attachmentRanges {
+            storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
+        }
+
+        // Strip trailing line terminator before style matching.
+        var lineRange = paraRange
+        let lastChar = nsStr.character(at: lineRange.location + lineRange.length - 1)
+        if lastChar == 0x000A || lastChar == 0x000D || lastChar == 0x2028 || lastChar == 0x2029 {
+            lineRange.length -= 1
+        }
+        if lineRange.length > 0 {
+            applyLineStyle(nsStr.substring(with: lineRange), range: lineRange, in: storage)
+        }
+
+        storage.endEditing()
+    }
+
+    /// Full-document re-style. Use only on load and after image operations.
     func applyMarkdownStyling() {
         guard let storage = textStorage, storage.length > 0 else { return }
         let nsStr = storage.string as NSString
@@ -375,7 +390,7 @@ struct MarkdownEditor: NSViewRepresentable {
             let md = tv.extractMarkdown()
             lastMarkdown = md
             parent.markdown = md
-            tv.applyMarkdownStyling()
+            tv.applyMarkdownStylingForCurrentLine()
         }
 
         func load(_ md: String, into tv: MarkdownTextView) {

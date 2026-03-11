@@ -1391,3 +1391,144 @@ still works and nothing is lost.
 The other platforms (Windows, Linux, iOS, Android) still have the original
 server-dependent creation flow. They will need the same client-generated ID
 treatment when it is their turn.
+
+---
+
+## 2026-03-11 — Session 2: inline images + Markdown styling
+
+*(Same day, second session. The previous session closed with offline-first note/folder creation working on macOS. This session tackled a much bigger scope than expected.)*
+
+### The question: how do you put images in a note?
+
+The user asked for images interleaved with text, cross-platform, with no browser engine. Three options were on the table:
+
+1. **Base64-embed images in the Markdown string.** Simplest to implement, but inflates note size dramatically and would destroy WebSocket framing for any image larger than a thumbnail. Rejected.
+
+2. **NSTextView block document model.** Treat the note as a sequence of typed blocks (text, image, table). Rich and extensible, but every platform needs its own block renderer and there is no universal serialisation format. Rejected — too much complexity for a first pass.
+
+3. **Markdown text + separate blob store.** Note content is plain Markdown. Images are referenced as `![](amadeuz://blob/<uuid>)`. The binary data lives in a flat blob store on the server, fetched by UUID. This keeps the note as a plain string — easy to persist, sync, search — while offloading binary handling to a dedicated layer.
+
+Option 3 was the clear winner. The Markdown string is already the sync unit; the blob is immutable content-addressed by UUID. These are separable problems.
+
+### The editor: NSTextView
+
+`TextEditor` (SwiftUI's built-in text field) wraps `NSTextView` but exposes almost none of its power. The only way to get inline images in a native macOS editor is to go straight to `NSTextView` via `NSViewRepresentable`.
+
+The result: `MarkdownEditor.swift`, which wraps `NSTextView` with a custom `NSTextAttachment` subclass called `BlobAttachment`. The attachment stores a `blobID` alongside its image data, so the serialiser can reconstruct the `amadeuz://blob/<uuid>` Markdown reference from the in-memory attributed string.
+
+Two directions of conversion needed:
+- **Load** (`buildAttributedString`): parse Markdown → split on image references → create `BlobAttachment` for each image reference, fetch image from blob store → `NSAttributedString`
+- **Save** (`extractMarkdown`): enumerate attachments in `NSAttributedString` → reconstruct Markdown string with `![](amadeuz://blob/<uuid>)` references in the right positions
+
+The round-trip is clean because `extractMarkdown` only looks at `.attachment` attributes, ignoring all the visual styling (font, color) that gets layered on top.
+
+> 📝 *Write here: first impressions of NSTextView vs the SwiftUI TextEditor you had before. Was the loss of "it just works" painful? Or did you immediately feel more in control?*
+
+### Dark mode: the first bug
+
+With the new `NSTextView` in place, the text was black — invisible on a dark theme. `TextEditor` handled this automatically. Raw `NSTextView` does not.
+
+The fix touched three places:
+1. `defaultAttrs` in `buildAttributedString`: add `.foregroundColor: NSColor.labelColor`
+2. `tv.textColor = .labelColor` in the view setup
+3. `tv.typingAttributes[.foregroundColor] = .labelColor` in the view setup
+
+`NSColor.labelColor` is a dynamic system color that resolves to white on dark, black on light. It is the right default for body text.
+
+### The typing-after-image bug
+
+After fixing dark mode globally, a subtler variant appeared: text typed immediately after an image went black.
+
+The cause: `NSAttributedString(attachment: att)` — the standard initialiser — produces a one-character attributed string with no `foregroundColor`. When `NSTextView` derives `typingAttributes` for the next character, it samples the character before the cursor. If that character is a color-less attachment, `typingAttributes` comes back with no foreground color, which `NSTextView` renders as black.
+
+Two fixes together closed this:
+1. `attString(for:)` helper — wraps any `BlobAttachment` in an `NSAttributedString` that explicitly carries `.foregroundColor: NSColor.labelColor`. Used everywhere an attachment is inserted.
+2. `restoreTypingAttributes()` — called after any programmatic insert; forces `typingAttributes[.foregroundColor] = .labelColor`.
+
+The same bug appeared when *loading* a note that already contained an image: `buildAttributedString` was also using the bare `NSAttributedString(attachment:)` initialiser. Fixed in the same pass.
+
+> 📝 *Write here: this is the kind of bug that makes you appreciate platforms that are fully declarative. With NSTextView you are managing state that SwiftUI would normally hide from you. Did it feel like a fair trade?*
+
+### Extra note row height from the image emoji
+
+The note list preview was replacing image references with a `📷` placeholder. This was a mistake: emoji have larger font metrics than `.caption` text, which caused an extra margin between the content preview and the folder label. Replaced the emoji with an empty string. Collapsed consecutive blank lines with a regex. Row height became stable.
+
+### Markdown rich text: a surprise delight
+
+The user asked for simple Markdown formatting — headers, bullets, checkboxes — "since we're already in Markdown". With the `NSTextStorage` infrastructure already in place, this was a natural extension: `applyMarkdownStyling()` adds visual attributes (font, color, strikethrough) after each change without touching the underlying text.
+
+Features implemented:
+- `# ` → system bold font +9pt; `#` characters dimmed to `tertiaryLabelColor`
+- `## ` → system bold font +5pt; `##` dimmed
+- `### ` → system bold font +2pt; `###` dimmed
+- `- ` → `-` dimmed to `tertiaryLabelColor`
+- `- [ ] ` → `[ ]` in `secondaryLabelColor`
+- `- [x] ` → `[x]` in `systemGreen`, rest of line in `secondaryLabelColor` with strikethrough
+
+The user asked why there is no third-party library for this — "if it were a web app, we'd just install a dependency". The honest answer: the ecosystem is thinner and the approach is different. Native macOS rich text typically uses `NSAttributedString` directly, which is lower level but also more flexible. There are some libraries, but they are usually opinionated about the full editing experience and tend to conflict with anything custom. For a narrow feature like Markdown syntax highlighting over an existing `NSTextView`, rolling it yourself is usually less work than integrating a library that was designed for different assumptions.
+
+### The scroll jump
+
+With Markdown styling working, a new symptom appeared: pressing the spacebar caused the scroll position to jump down and snap back. Not a rounding error — it was a full-document layout invalidation on every keystroke.
+
+The root cause: `applyMarkdownStyling()` was calling `storage.addAttribute(range: full document range)` on every character change. This forced `NSLayoutManager` to recompute the entire document's layout, which changed the document's estimated height, which shifted the scroll offset.
+
+The fix: a dedicated fast path `applyMarkdownStylingForCurrentLine()` that computes `paragraphRange(for: cursorPosition)` and operates only on that range. Full-document styling is still called on note load and paste. Per-keystroke styling only touches the paragraph being edited. Scroll position is stable.
+
+### The offline image problem
+
+After testing with the server down, it was obvious: the original image implementation was not offline-first at all.
+
+The flow was:
+1. User pastes an image
+2. Client uploads to server, gets back a blob ID
+3. Client inserts the image with the server-assigned ID
+
+Step 2 fails offline. The image is never inserted.
+
+This was the same conceptual mistake that was made earlier with note/folder creation — letting the server own the identity. The fix follows the same pattern:
+
+**Client generates the UUID.** The image is saved to local disk immediately. It is inserted into the note with the final ID before any network call. Then a background task attempts the upload via `PUT /blobs/:id`. If the upload fails, the blob ID is added to `pending_blobs.json`. On the next reconnect, `uploadPending()` retries all queued blobs.
+
+The server's `PUT /blobs/:id` endpoint is idempotent: if the blob already exists, it returns 200 without re-writing. Retries are safe.
+
+The `BlobStore` class manages:
+- Local cache (`~/Library/Application Support/amadeuz/blobs/`)
+- Pending upload queue (`pending_blobs.json`)
+- `save(_ data: Data) throws -> String` — synchronous local save, returns UUID
+- `upload(id: String) async throws` — `PUT /blobs/:id`, removes from pending on success
+- `uploadPending() async` — called by `NoteViewModel` on reconnect
+
+> 📝 *Write here: the pattern of "client owns the identity, server is just a mirror" is emerging as a strong principle across this project. Does it feel natural now? Did the first time you got it right (notes/folders) make the blobs version obvious?*
+
+### The note creation overwrite bug
+
+While testing offline image insert, a more serious bug surfaced: creating a new note was sometimes overwriting existing notes with empty content.
+
+**Scenario 1 (offline → online):** Go offline, create a note, type in it. Come back online. Hit "new note". The previously created note's content is wiped.
+
+**Scenario 2:** Select a note, create a new note from the toolbar. The old note is overwritten with empty content.
+
+The cause was a race condition in the SwiftUI `onChange` + `NoteViewModel` interaction:
+
+1. `createNote()` calls `loadNoteIntoEditor(newNote)` — this sets `editingNoteID = newNote.id`, `editingTitle = ""`, `editingContent = ""`
+2. `createNote()` then sets `selectedNoteID = newNote.id`
+3. SwiftUI's `onChange(of: selectedNoteID)` fires, calling `noteSelectionChanged(from: oldNoteID, to: newNoteID)`
+4. `noteSelectionChanged` sees `oldNoteID` is non-nil and calls `flushNote(oldNoteID, editingTitle, editingContent)`
+5. But `editingTitle` and `editingContent` are now `""` — step 1 already cleared them
+6. `flushNote` writes `""` and `""` to the old note — content destroyed
+
+The fix: guard the flush with `old == editingNoteID`. By the time `onChange` fires, `editingNoteID` has already been updated to `newNote.id` by `loadNoteIntoEditor`. The condition `old == editingNoteID` is false, so the flush is skipped. The old note's content is never clobbered.
+
+This guard is a clean invariant: "flush the editor into note X only if the editor is currently showing note X." The `createNote()` path violates that invariant (the editor was handed to the new note before `onChange` fires), and the guard correctly detects the violation.
+
+### Where things stand
+
+The macOS client now has:
+- Inline images: paste or drag any image into a note; images sync cross-device; work offline
+- Markdown styling: headers at three levels, bullet lists, and checkboxes with live rendering
+- Scroll-stable per-keystroke styling
+- Offline-first blob store with automatic retry on reconnect
+- No note data loss on create
+
+The other platforms (Windows, Linux, iOS, Android) still use a plain `TextEditor`/`GtkTextView`/`UITextView` with no image or Markdown support. Images and Markdown are currently macOS-only.

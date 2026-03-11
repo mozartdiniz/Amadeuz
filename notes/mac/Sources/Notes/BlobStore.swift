@@ -1,46 +1,79 @@
 import Foundation
 
-/// Manages local blob cache and HTTP upload/download against the amadeuz server.
+/// Manages local blob cache, pending upload queue, and HTTP sync with the server.
+///
+/// Offline-first: images are saved locally with a client-generated ID the moment
+/// the user inserts them. A pending queue tracks blobs not yet uploaded to the server.
+/// On reconnect, NoteViewModel calls uploadPending() to flush the queue.
 final class BlobStore {
 
     private let cacheDir: URL
-    private var serverBase: String   // e.g. "http://192.168.1.10:8080"
+    private let pendingURL: URL
+    private var serverBase: String
+    private var pendingIDs: Set<String>
 
     init(serverBase: String) {
         self.serverBase = serverBase
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        cacheDir = support.appendingPathComponent("amadeuz/blobs", isDirectory: true)
+        let amadeuzDir = support.appendingPathComponent("amadeuz", isDirectory: true)
+        cacheDir   = amadeuzDir.appendingPathComponent("blobs", isDirectory: true)
+        pendingURL = amadeuzDir.appendingPathComponent("pending_blobs.json")
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        pendingIDs = BlobStore.loadPending(from: pendingURL)
     }
 
     func updateServerBase(_ base: String) {
         serverBase = base
     }
 
-    // MARK: - Cache
+    // MARK: - Local save (works offline)
+
+    /// Saves image data locally with a client-generated UUID and queues it for upload.
+    /// Returns the blob ID that should be embedded in the note content.
+    func save(_ data: Data) throws -> String {
+        let id = UUID().uuidString.lowercased()
+        try data.write(to: cacheURL(for: id), options: .atomic)
+        pendingIDs.insert(id)
+        savePending()
+        return id
+    }
+
+    // MARK: - Cache read
 
     func cachedData(for id: String) -> Data? {
         try? Data(contentsOf: cacheURL(for: id))
     }
 
-    // MARK: - Upload
+    // MARK: - Upload (requires connection)
 
-    /// Uploads raw image data to the server and caches it locally.
-    /// Returns the assigned blob ID.
-    func upload(_ data: Data) async throws -> String {
-        guard let url = URL(string: "\(serverBase)/blobs") else { throw URLError(.badURL) }
+    /// Uploads a single locally cached blob to the server via PUT /blobs/:id.
+    /// Idempotent — safe to retry. Removes from pending queue on success.
+    func upload(id: String) async throws {
+        guard let data = cachedData(for: id) else { return }
+        guard let url = URL(string: "\(serverBase)/blobs/\(id)") else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
-        req.httpMethod = "POST"
+        req.httpMethod = "PUT"
         req.httpBody = data
-        let (responseData, _) = try await URLSession.shared.data(for: req)
-        let decoded = try JSONDecoder().decode(UploadResponse.self, from: responseData)
-        try? data.write(to: cacheURL(for: decoded.id), options: .atomic)
-        return decoded.id
+        let (_, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse,
+              http.statusCode == 200 || http.statusCode == 201 else {
+            throw URLError(.badServerResponse)
+        }
+        pendingIDs.remove(id)
+        savePending()
+    }
+
+    /// Uploads all blobs that haven't reached the server yet. Call on reconnect.
+    func uploadPending() async {
+        let ids = pendingIDs // snapshot — set may change during iteration
+        for id in ids {
+            try? await upload(id: id)
+        }
     }
 
     // MARK: - Download
 
-    /// Downloads a blob, caching it locally. Returns cached data on subsequent calls.
+    /// Returns locally cached data if available; otherwise downloads from server and caches.
     func download(id: String) async throws -> Data {
         if let cached = cachedData(for: id) { return cached }
         guard let url = URL(string: "\(serverBase)/blobs/\(id)") else { throw URLError(.badURL) }
@@ -49,21 +82,27 @@ final class BlobStore {
         return data
     }
 
-    // MARK: - Helpers
+    // MARK: - Pending queue persistence
+
+    private func savePending() {
+        guard let data = try? JSONEncoder().encode(Array(pendingIDs)) else { return }
+        try? data.write(to: pendingURL, options: .atomic)
+    }
+
+    private static func loadPending(from url: URL) -> Set<String> {
+        guard let data = try? Data(contentsOf: url),
+              let ids  = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(ids)
+    }
 
     private func cacheURL(for id: String) -> URL {
         cacheDir.appendingPathComponent(id)
     }
 }
 
-private struct UploadResponse: Decodable {
-    let id: String
-}
-
 // MARK: - Derive HTTP base from WebSocket URL
 
 extension BlobStore {
-    /// Converts a WebSocket URL like "ws://host:8080/ws" to "http://host:8080".
     static func httpBase(from wsURL: String) -> String {
         wsURL
             .replacingOccurrences(of: "wss://", with: "https://")

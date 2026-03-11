@@ -42,6 +42,9 @@
 | Move note between folders | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Folder label in note list row | — | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Search / filter notes | — | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Inline images in notes | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Offline blob queue (insert images offline) | — | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -64,6 +67,7 @@
 - In-memory store + atomic disk persistence to `server/data.json`
 - On new client connect: sends `init` with all folders and all notes (including content)
 - Last-write-wins per note (timestamp compare), cascade delete when folder is deleted
+- Blob store: `PUT /blobs/:id` (idempotent upload, client-provided UUID), `GET /blobs/:id` (serves with detected content-type, immutable cache headers); max 20 MB per blob; blobs stored in `server/blobs/` directory
 
 ### Wire protocol (current)
 
@@ -106,10 +110,11 @@ Update/move/delete responses are broadcast to others only.
 ### File layout
 ```
 server/
-├── main.go        ← HTTP setup + WebSocket upgrade loop
+├── main.go        ← HTTP setup + WebSocket upgrade loop + blob route
 ├── model.go       ← Folder, Note, Msg types
 ├── store.go       ← in-memory store + atomic JSON persistence
 ├── hub.go         ← WebSocket hub + message dispatch
+├── blobs.go       ← PUT/GET /blobs/:id — idempotent upload, content-type detection
 └── store_test.go  ← 20 unit tests
 ```
 
@@ -139,7 +144,7 @@ server/
 
 ## macOS (Swift + SwiftUI)
 
-**Status:** Phase 2b complete + offline-first create + UX fixes (2026-03-11)
+**Status:** Phase 2b complete + offline-first create + inline images + Markdown styling (2026-03-11)
 **Location:** `notes/mac/`
 **Run:** `cd notes/mac && swift run`
 **Requires:** Xcode command-line tools + accepted license (`sudo xcodebuild -license`)
@@ -153,6 +158,9 @@ server/
 - Note list sorted by `updatedAt` descending, with title, date, content preview, and folder label
 - Folder label shown in note row (folder icon + name); shows "—" if note has no folder (keeps row height constant)
 - Search field (top-right toolbar) filters notes by title or content; auto-switches to "All Notes" when typing
+- Rich Markdown editor (`MarkdownEditor.swift`): inline images via drag & drop or paste, Markdown styling for headers (`#`, `##`, `###`), bullets (`-`), and checkboxes (`- [ ]`, `- [x]`)
+- Images stored as `![](amadeuz://blob/<uuid>)` in note content; binary data managed by `BlobStore`
+- Offline image support: blob saved locally and queued for upload the moment it is inserted; upload fires in background and retries on reconnect
 - Full offline-first: loads `data.json` on startup, works without server
 - Create notes and folders while offline — they appear immediately, saved to disk, pushed to server on reconnect
 - Debounce: 500ms after last change to title or content → save locally + push to server
@@ -177,6 +185,8 @@ Default server: `ws://localhost:8080/ws`
 | `Models.swift` | `Folder`, `Note`, `WSMsg` — all types + Codable conformance |
 | `ContentView.swift` | `NavigationSplitView` with `FolderSidebar`, `NoteList`, `NoteEditor` |
 | `NoteViewModel.swift` | `NotesViewModel` — state, selection management, debounce, sync |
+| `MarkdownEditor.swift` | `NSTextView`-based rich editor: inline images (paste/drop), Markdown styling, blob insertion |
+| `BlobStore.swift` | Local blob cache (`~/Library/Application Support/amadeuz/blobs/`), pending upload queue, `PUT /blobs/:id` HTTP sync |
 | `LocalStore.swift` | Read/write `data.json` (folders + notes) in Application Support |
 | `SyncService.swift` | `URLSessionWebSocketTask` wrapper, generic `WSMsg` handler, auto-reconnect |
 
