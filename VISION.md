@@ -42,10 +42,11 @@ New features should extend it without breaking existing clients.
 The server runs wherever the user wants: a Raspberry Pi, a home NAS, a VPS.
 No vendor lock-in. No accounts unless the user explicitly enables them.
 
-### 5. End-to-end encrypted by default
-The server is a routing and storage layer, not a trust boundary. Note content is encrypted
-on the client before transmission. The server stores and relays ciphertext only.
+### 5. End-to-end encrypted by default (Phase 2c)
+The server is a routing and storage layer, not a trust boundary. Note content will be
+encrypted on the client before transmission. The server stores and relays ciphertext only.
 The server operator cannot read user data even with full database access.
+*(Currently implemented: plaintext storage with JWT auth. E2E encryption is Phase 2c.)*
 
 ### 6. Modular server — one binary, opt-in features
 The server ships as a single binary. Features (notes, files, contacts, reminders) are
@@ -66,124 +67,124 @@ process, one database file, one config. No orchestration required.
 ├─────────────┤                      │                              │
 │   iOS app   │ ◄──────────────────► │   internal packages:         │
 └─────────────┘                      │     auth / notes / folders   │
-       │                             │     hub / users / config     │
+       │                             │     blobs / db               │
   local disk                         └──────────────────────────────┘
-  (per device,
-   encrypted)
+  (per device)
 ```
 
-**The server** is a routing and storage layer. It enforces who can access what,
-but it cannot read note content — all content arrives as ciphertext.
+**The server** is a routing and storage layer. It enforces who can access what via JWT auth.
+All mutations go through REST; per-note WebSocket is reserved for live keystroke streaming only.
 
-**Each client** owns a local copy of the data and its own encryption keys.
-On connect, it compares timestamps with the server and resolves conflicts.
-Keys are stored in the platform's secure credential store (Keychain on Apple,
-Credential Manager on Windows, libsecret on Linux).
+**Each client** owns a local copy of the data. On connect, it runs a full sync: merges server
+state with local state by timestamp (last-write-wins), pushes any locally-created or
+locally-newer items. JWT is stored in the platform's secure credential store (Keychain on
+Apple, Credential Manager on Windows, libsecret on Linux).
 
 ---
 
-## Wire protocol
+## Wire protocol (current — Phase 2a)
 
 All messages are JSON. `updated_at` is Unix milliseconds.
 
-### REST endpoints (authenticated via JWT in Authorization header)
+### REST endpoints (authenticated via `Authorization: Bearer <token>`)
 
 ```
-POST /auth/register        → create account, returns JWT
-POST /auth/login           → returns JWT
+POST /auth/register           body: { email, password }                     → { token, recovery_code }
+POST /auth/login              body: { email, password }                     → { token }
+POST /auth/recover            body: { email, recovery_code, new_password }  → { token, recovery_code }
 
-GET  /folders              → list user's folders
-POST /folders              → create folder
-DELETE /folders/{id}       → delete folder
+GET    /folders               → { folders: [...] }
+POST   /folders               body: { id?, name, created_at? }              → { folder }
+PATCH  /folders/:id           body: { name }                                → { folder }
+DELETE /folders/:id                                                         → 204
 
-GET  /notes                → list user's notes (metadata, no content)
-POST /notes                → create note
-GET  /notes/{id}           → fetch note (ciphertext + key envelope for caller)
-PATCH /notes/{id}          → update note
-DELETE /notes/{id}         → delete note
+GET    /notes                 → { notes: [...] }  (includes content)
+POST   /notes                 body: { id?, folder_id?, title, content, updated_at, created_at? } → { note }
+PATCH  /notes/:id             body: { title, content, updated_at }          → { note } or 409 if stale
+PATCH  /notes/:id/move        body: { folder_id }                           → { note }
+DELETE /notes/:id                                                           → 204
 
-GET  /notes/{id}/shares    → list collaborators
-POST /notes/{id}/share     → share with another user (sends key envelope)
-DELETE /notes/{id}/share/{uid} → revoke access
-
-GET  /users/search?email=  → look up user's public key (for sharing)
+PUT    /blobs/:id             (authenticated)  → 201 created / 200 already exists
+GET    /blobs/:id             (unauthenticated) → blob data
 ```
 
-### WebSocket (per note, authenticated via ?token=<jwt>)
+JWT is also accepted as `?token=<jwt>` query param (for WebSocket upgrade, where HTTP headers
+are not reliably supported by all client environments).
+
+### WebSocket (per note, authenticated via `?token=<jwt>`)
 
 ```
-wss://server/notes/{id}/ws?token=<jwt>
+GET /notes/:id/ws?token=<jwt>
 ```
 
 ```json
 // Server → client on connect
-{ "type": "init", "note_id": "uuid", "content": "<ciphertext>", "updated_at": 1234567890123 }
+{ "type": "init", "title": "...", "content": "...", "updated_at": 123 }
 
-// Client → server on user edit
-{ "type": "update", "note_id": "uuid", "content": "<ciphertext>", "updated_at": 1234567890123 }
+// Client → server on keystroke
+{ "type": "update", "title": "...", "content": "...", "updated_at": 123 }
 
-// Server → all other clients in the same note room
-{ "type": "update", "note_id": "uuid", "content": "<ciphertext>", "updated_at": 1234567890123 }
+// Server → all other clients watching this note
+{ "type": "update", "title": "...", "content": "...", "updated_at": 123 }
 ```
 
-`content` is base64url-encoded AES-256-GCM ciphertext (nonce prepended).
-The server applies the same last-write-wins rule: only accepts and rebroadcasts if
-`updated_at` is strictly greater than stored.
+Server applies last-write-wins: only accepts and rebroadcasts if `updated_at` is strictly
+greater than stored. Ping/pong keepalive: 30 s interval, 60 s read deadline.
+
+### Phase 2c wire protocol (planned — E2E encryption)
+
+When E2E encryption is implemented, `content` fields will carry base64url-encoded
+AES-256-GCM ciphertext (random nonce prepended). Additional endpoints will be added for
+key envelope exchange and note sharing. The REST + per-note WebSocket structure is unchanged;
+only the `content` field changes from plaintext to ciphertext. Echo guard will use timestamp
+comparison only (not content comparison) because two encryptions of the same plaintext
+produce different ciphertext due to the random AES-GCM nonce.
 
 ---
 
 ## Local storage format
 
-Each note is stored as a separate file keyed by note ID. With E2E encryption, `content`
-is ciphertext (base64url). The note key is stored in the platform's secure credential
-store, not alongside the data file.
+Each client stores all folders and notes in a single JSON file.
 
 ```json
-{ "content": "<ciphertext or plaintext>", "updatedAt": 1234567890123 }
+{ "folders": [...], "notes": [...] }
 ```
-
-Note: `updatedAt` (camelCase) in local files vs `updated_at` (snake_case) in wire messages.
-This matches the original macOS design and all clients follow it.
 
 Storage paths:
 
-| Platform | Notes directory | Credential store |
-|----------|-----------------|-----------------|
-| macOS    | `~/Library/Application Support/amadeuz/notes/` | Keychain |
-| Windows  | `%APPDATA%\amadeuz\notes\` | Windows Credential Manager |
-| Linux    | `~/.local/share/amadeuz/notes/` | libsecret / GNOME Keyring |
-| Server   | `amadeuz.db` (SQLite, ciphertext only) | — |
+| Platform | Data file | Credential store |
+|----------|-----------|-----------------|
+| macOS    | `~/Library/Application Support/amadeuz/data.json` | Keychain |
+| Windows  | `%APPDATA%\amadeuz\data.json` | Windows Credential Manager |
+| Linux    | `~/.local/share/amadeuz/data.json` | libsecret / GNOME Keyring |
+| iOS      | `<App>/Library/Application Support/amadeuz/data.json` | Keychain |
+| Server   | `amadeuz.db` (SQLite) | — |
 
 ---
 
-## Sync logic (identical on every client)
+## Sync logic
 
-This logic lives in `NoteEditorViewModel` (or equivalent) on every platform.
-
-**Important (E2E encryption):** the echo guard must use timestamp comparison only —
-not content equality. Two encryptions of the same plaintext produce different ciphertext
-(AES-GCM uses a random nonce). Comparing ciphertext blobs would always treat own-sent
-updates as new content and cause an infinite loop.
-
+**On login / reconnect (`fullSync`):**
 ```
-on connect → authenticate with JWT, open WS to /notes/{id}/ws?token=<jwt>
-           → receive "init" from server (ciphertext + timestamp)
-  decrypt content with note key
-  if server.updatedAt > local.updatedAt → accept, save locally
-  if local.updatedAt > server.updatedAt → encrypt local, push to server
-  if equal                              → already in sync, do nothing
+1. Load local state from disk
+2. GET /folders + GET /notes from server
+3. For each server item: if server.updatedAt > local.updatedAt → accept, overwrite local
+4. For each local item not on server, or local.updatedAt > server.updatedAt → push to server
+5. Delete local items that server no longer has (were deleted by another client)
+```
 
-on user keystroke
-  wait 500 ms (debounce)
-  if current updatedAt == last received updatedAt → skip (echo guard by timestamp)
-  else → encrypt content, save ciphertext to disk, send "update" to server
+**On user keystroke (debounced 500 ms):**
+```
+save locally → PATCH /notes/:id (with current updatedAt)
+if 409 stale → server has newer; re-fetch and discard local change
+```
 
-on server "update" received
-  decrypt, apply same timestamp comparison as "init"
-
-on disconnect
-  wait 3 seconds, reconnect
-  continue working offline in the meantime (local decrypted content stays in memory)
+**Per-note WebSocket (live streaming):**
+```
+open when note is selected, close when note is deselected
+receive "init" on connect → apply same timestamp merge as fullSync
+receive "update" → apply if updated_at > local
+send "update" on debounced keystroke (in addition to REST PATCH)
 ```
 
 ---
@@ -194,35 +195,39 @@ on disconnect
 amadeuz/
 ├── VISION.md            ← this file
 ├── PROGRESS.md          ← per-platform feature status
+├── DIARY.md             ← build journal
 ├── CLAUDE.md            ← project brief for AI sessions
 ├── .gitignore
 ├── server/              ← Go sync server (modular monolith)
 │   ├── go.mod
 │   ├── go.sum
-│   ├── main.go          ← thin wiring: open DB, register handlers, listen
+│   ├── main.go          ← thin wiring: open DB, register handlers, listen, reset-password CLI
+│   ├── server_test.go   ← 25 integration tests
 │   └── internal/
-│       ├── config/      ← port, DB path, JWT secret, feature flags
-│       ├── db/          ← SQLite open + migrations
-│       ├── auth/        ← register, login, JWT middleware
-│       ├── users/       ← user model, public key storage
-│       ├── notes/       ← CRUD REST + per-note WebSocket hub
-│       ├── folders/     ← folder CRUD
-│       └── hub/         ← WebSocket room management (keyed by note ID)
+│       ├── db/          ← SQLite open, migrations, JWT secret, NewID
+│       ├── auth/        ← register, login, recover handlers + JWT middleware
+│       ├── notes/       ← note CRUD REST + per-note WebSocket hub
+│       ├── folders/     ← folder CRUD handlers
+│       └── blobs/       ← blob upload/download handlers
 └── notes/
     ├── mac/             ← macOS (Swift + SwiftUI)
     │   ├── Package.swift
     │   └── Sources/Notes/
-    │       ├── NoteApp.swift
-    │       ├── Models.swift         ← Folder, Note, WSMsg types
-    │       ├── ContentView.swift    ← NavigationSplitView, sidebar, note list, editor
-    │       ├── NoteViewModel.swift  ← state, selection, debounce, sync, CRUD
+    │       ├── NoteApp.swift        ← @main entry; @StateObject vm; Sign Out menu command
+    │       ├── Models.swift         ← Folder, Note, AuthResponse, NoteWsMsg types
+    │       ├── ContentView.swift    ← auth gate; NavigationSplitView; recovery code sheet
+    │       ├── NoteViewModel.swift  ← @MainActor; auth state; fullSync(); REST CRUD
     │       ├── MarkdownEditor.swift ← NSTextView-based rich editor (Markdown + inline images)
-    │       ├── BlobStore.swift      ← local blob cache, pending upload queue, HTTP sync
-    │       ├── LocalStore.swift     ← read/write data.json
-    │       └── SyncService.swift    ← URLSessionWebSocketTask wrapper, auto-reconnect
+    │       ├── BlobStore.swift      ← local blob cache, pending upload queue, authenticated PUT
+    │       ├── LocalStore.swift     ← read/write data.json in Application Support
+    │       ├── SyncService.swift    ← NoteSync: per-note WebSocket, receive-only, auto-reconnect
+    │       ├── KeychainStore.swift  ← save, load, delete JWT from macOS Keychain
+    │       ├── APIClient.swift      ← all REST calls + WebSocket URL builder
+    │       └── AuthView.swift       ← Login / Register / Recover UI; RecoveryCodeView sheet
     ├── windows/         ← Windows (C# + WinUI 3)
     ├── linux/           ← Linux (C++ + GTK4)
-    └── ios/             ← iOS (Swift + SwiftUI)
+    ├── ios/             ← iOS (Swift + SwiftUI)
+    └── android/         ← Android (Kotlin + Jetpack Compose)
 ```
 
 ---
@@ -242,13 +247,16 @@ amadeuz/
 
 These are developed in order — each phase blocks the next.
 
-**Phase 2a — User accounts**
-Server restructured as modular monolith (SQLite, `internal/` packages, JWT auth).
-Clients gain login/register UI, JWT stored in platform credential store.
+**Phase 2a — User accounts** ✅ COMPLETE (server + macOS)
+Server restructured as modular monolith (SQLite, `internal/` packages, JWT auth, REST API,
+per-note WebSocket). macOS client updated with login/register/recover UI, JWT in Keychain,
+REST CRUD, per-note WebSocket live sync. 25 integration tests passing.
+Windows, Linux, iOS, Android: Phase 2b architecture still in use — Phase 2a parity is the next step.
 
 **Phase 2b — Multiple notes + folders** ✅ COMPLETE (server + macOS + Windows + Linux + iOS)
 Server: folder + note CRUD over typed WebSocket messages, in-memory store + data.json.
 Client: three-column layout (folder sidebar, note list, note editor) on all three desktop platforms.
+macOS also has: inline images, Markdown styling, offline blob queue, search, move note.
 
 **Phase 2c — End-to-end encryption**
 Server stores ciphertext only. Clients generate X25519 keypairs, encrypt notes with
@@ -287,9 +295,9 @@ HTTPS/WSS, dynamic DNS or relay service, proper packaging (`.app`, `.msix`, `.de
 | json-glib for Linux JSON | Same GNOME stack as GTK4 + libsoup; no extra dependency. |
 | Modular monolith over microservices | Self-hosters run one binary, not a container orchestra. Internal package boundaries give the same isolation as services; can be extracted later if needed. |
 | SQLite via modernc.org/sqlite | Pure Go (no CGO), cross-compiles to ARM for Raspberry Pi without a C toolchain. Single database file, zero config. |
-| X25519 + AES-256-GCM for E2E encryption | X25519 is the modern standard for ECDH (simpler API and no cofactor attack surface vs P-256). AES-256-GCM provides authenticated encryption in one primitive. Both available in Apple CryptoKit without external dependencies. |
-| Note key per note, wrapped per user | Sharing requires that collaborators decrypt independently. Re-wrapping the note key (not re-encrypting the note content) for each new collaborator is O(1) in ciphertext size regardless of note size. |
-| Echo guard by timestamp, not content | With E2E encryption, two encryptions of the same plaintext produce different ciphertext (random AES-GCM nonce). Content equality comparison would always treat own updates as new and cause an infinite loop. |
+| X25519 + AES-256-GCM for E2E encryption (Phase 2c) | X25519 is the modern standard for ECDH (simpler API and no cofactor attack surface vs P-256). AES-256-GCM provides authenticated encryption in one primitive. Both available in Apple CryptoKit without external dependencies. |
+| Note key per note, wrapped per user (Phase 2c) | Sharing requires that collaborators decrypt independently. Re-wrapping the note key (not re-encrypting the note content) for each new collaborator is O(1) in ciphertext size regardless of note size. |
+| Echo guard by timestamp, not content (Phase 2c) | With E2E encryption, two encryptions of the same plaintext produce different ciphertext (random AES-GCM nonce). Content equality comparison would always treat own updates as new and cause an infinite loop. |
 | JWT via query param for WebSocket auth | HTTP headers are not reliably transmitted during WebSocket upgrade from all client environments. Query parameter is universally supported. |
 | WinAppSDK: no self-contained native bundling | `WindowsAppSDKSelfContained=true` bundles WinAppSDK native DLLs that are incompatible with Windows Insider Preview builds (CoreMessagingXP.dll version mismatch). Removed; app relies on the installed Windows App Runtime instead. Users get an install prompt on first run on a new machine — acceptable tradeoff. |
 | WinAppSDK 1.8 (not 1.6) | WinAppSDK 1.6 bootstrap failed on Windows Insider due to CBS package identity mismatch. 1.8 is the current stable release and was already installed on the dev machine. |
@@ -326,3 +334,12 @@ HTTPS/WSS, dynamic DNS or relay service, proper packaging (`.app`, `.msix`, `.de
 | `noteSelectionChanged` guards `old == editingNoteID` before flushing | `createNote()` calls `loadNoteIntoEditor(newNote)` (setting `editingNoteID` to the new note) before setting `selectedNoteID`. SwiftUI's `onChange` then fires `noteSelectionChanged(from: oldNoteID, to: newNoteID)`. Without a guard, this would call `flushNote(oldNoteID, "", "")` — overwriting the old note's content with empty string — because the editor's `editingTitle`/`editingContent` had already been cleared by `loadNoteIntoEditor`. The guard `old == editingNoteID` makes the flush conditional on the editor still displaying the old note, which it no longer is after `loadNoteIntoEditor` has run. |
 | Markdown styling via NSTextStorage attribute manipulation, not content mutation | `applyMarkdownStyling()` adds visual attributes (font size, color, strikethrough) to the `NSTextStorage` without changing the underlying characters. `extractMarkdown()` serialises only `.attachment` attributes — it ignores all visual attributes. This means the Markdown string round-trips cleanly regardless of styling applied, and there is no risk of styling code corrupting note content. |
 | Per-keystroke styling scoped to current paragraph only | Calling `addAttribute` over the full document range on every keystroke causes `NSLayoutManager` to invalidate the entire layout, which forces a scroll jump as the layout reflows. Fix: `applyMarkdownStylingForCurrentLine()` computes `paragraphRange(for: cursorPosition)` and invalidates only that range. Full-document styling (`applyMarkdownStyling()`) is reserved for note load and paste operations where a full pass is correct. |
+| No email integration for password recovery | Email requires SMTP infrastructure (or a third-party email service), which is a self-hosting burden and an external dependency. The target audience (privacy-conscious, self-hosters) is exactly the audience least likely to want to configure SMTP or trust a third party with account metadata. |
+| Recovery code at registration (no email) | On account creation the server generates a one-time recovery code (high-entropy random string). The user saves it (password manager, printed paper). Presenting the code resets the password. CLI admin reset (`amadeuz-server reset-password <email> <new-password>`) is available as a last resort. This is the correct model for a self-hosted tool — no external dependency, honest about the tradeoffs. |
+| REST for CRUD, WebSocket for live streaming only | REST is stateless, maps cleanly to CRUD semantics, works with standard HTTP tooling, and lets clients queue mutations for offline retry. WebSocket is reserved for real-time per-keystroke streaming — the one case where request/response latency would be noticeable. |
+| Per-note WebSocket rooms (not a single bus) | A single WS endpoint that broadcasts all events to all connected clients requires every client to filter noise. Per-note rooms mean the server only sends a client updates for the note it currently has open. Scales better and eliminates unnecessary data transfer. |
+| JWT stored in macOS Keychain | Platform-native secure storage. Survives app restart without the user re-authenticating. Keychain items are sandboxed per app. No plaintext credentials in UserDefaults or on disk. |
+| `applyToken` clears local state before fullSync | When a user logs in or recovers, any in-memory and on-disk state from a previous session must be wiped before syncing from the server. Without this, the merge logic would push the previous user's notes to the new account. Discovered during testing. |
+| Recovery code rotation on use | A recovery code that can be used multiple times is equivalent to a second password that never changes. Rotating the code on each use limits the window of exposure. If a code is compromised and used by an attacker, the legitimate user's next recovery attempt will fail — which is a signal that the code was leaked. |
+| `APIError.conflict` carries server message | The server sends descriptive plain-text error bodies (e.g. "email already registered" vs "stale update"). A generic "Conflict" message loses this information. Passing the body through means the UI shows the server's actual explanation without needing to duplicate error string logic on the client. |
+| E2E encryption is non-negotiable for internet-facing deployments | On a LAN the user owns the trust boundary. On a VPS the hosting provider has root access to the SQLite file. Without E2E, a user who moves off iCloud to avoid Apple reading their notes has traded one corporation for their VPS provider. E2E ensures the server stores only ciphertext regardless of where it runs. This is also the primary reason the privacy-conscious audience will trust the product with sensitive content (medical notes, private journals, passwords). |

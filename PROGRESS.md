@@ -28,7 +28,7 @@
 | Connection status indicator | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Configurable server address | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Persistent server address | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Server persistence (data.json) | ✅ | — | — | — | — | — |
+| Server persistence (SQLite) | ✅ | — | — | — | — | — |
 | Multiple notes | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Folders (create / rename / delete) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
@@ -45,7 +45,13 @@
 | Inline images in notes | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Offline blob queue (insert images offline) | — | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| User accounts / JWT auth | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Register / Login / Recover | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Recovery codes | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| JWT in platform credential store | — | ✅ | ❌ | ❌ | ❌ | ❌ |
+| REST CRUD API | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Per-note WebSocket (live sync) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Sign Out | — | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
@@ -53,152 +59,153 @@
 
 ## Server (Go)
 
-**Status:** Phase 2b in progress — multiple notes + folders implemented, no auth yet.
+**Status:** Phase 2a complete — user accounts, JWT auth, REST API, SQLite persistence, per-note WebSocket.
 **Location:** `server/`
 **Run:** `cd server && go mod tidy && go run .`
-**Port:** `8080` on all interfaces (`0.0.0.0`)**Tests:** `cd server && go test ./...` (22 unit tests, all passing)
+**Port:** `8080` on all interfaces (`0.0.0.0`)
+**Tests:** `cd server && go test ./...` (25 integration tests, all passing)
 
+### What it does
 
-### Current state (Phase 2b)
-- Single WebSocket endpoint at `/ws`, no auth
-- Full folder + note CRUD over WebSocket messages (see wire protocol below)
-- Notes do not require a folder — `folder_id` is optional on `create_note`
-- `move_note` message moves a note to a different folder (or removes it from all folders)
-- In-memory store + atomic disk persistence to `server/data.json`
-- On new client connect: sends `init` with all folders and all notes (including content)
-- Last-write-wins per note (timestamp compare), cascade delete when folder is deleted
-- Blob store: `PUT /blobs/:id` (idempotent upload, client-provided UUID), `GET /blobs/:id` (serves with detected content-type, immutable cache headers); max 20 MB per blob; blobs stored in `server/blobs/` directory
+- User registration, login, and password recovery (recovery codes — no email required)
+- Admin CLI: `amadeuz-server reset-password <email> <new-password>`
+- JWT authentication (HS256, 30-day expiry); JWT secret auto-generated and persisted in DB
+- Full folder and note CRUD via REST
+- Per-note WebSocket for live typing sync (`GET /notes/:id/ws?token=<jwt>`)
+- Blob store: `PUT /blobs/:id` (authenticated, idempotent), `GET /blobs/:id` (unauthenticated)
+- SQLite via `modernc.org/sqlite` (pure Go, no CGO — cross-compiles to ARM for Raspberry Pi)
+- `PRAGMA foreign_keys = ON` + `PRAGMA journal_mode = WAL`
+- `ON DELETE CASCADE` for notes when their folder is deleted
 
-### Wire protocol (current)
+### REST API
 
-**Client → Server:**
-```json
-{ "type": "create_folder", "name": "Work" }                                       ← server generates ID
-{ "type": "create_folder", "folder_id": "<client-uuid>", "name": "Work" }         ← client-provided ID (offline sync)
-{ "type": "rename_folder", "folder_id": "...", "name": "Work Projects" }
-{ "type": "delete_folder", "folder_id": "..." }
-{ "type": "create_note",   "title": "My Note" }                                   ← folder_id optional; omit for unfoldered
-{ "type": "create_note",   "folder_id": "...", "title": "My Note" }
-{ "type": "create_note",   "note_id": "<client-uuid>", "folder_id": "...", "title": "...", "content": "...", "updated_at": 123 }  ← full offline note
-{ "type": "update_note",   "note_id": "...", "title": "...", "content": "...", "updated_at": 123456 }
-{ "type": "move_note",     "note_id": "...", "folder_id": "..." }                  ← folder_id empty = no folder
-{ "type": "delete_note",   "note_id": "..." }
+```
+POST /auth/register           body: { email, password }                     → { token, recovery_code }
+POST /auth/login              body: { email, password }                     → { token }
+POST /auth/recover            body: { email, recovery_code, new_password }  → { token, recovery_code }
+
+GET    /folders               → { folders: [...] }
+POST   /folders               body: { id?, name, created_at? }              → { folder }
+PATCH  /folders/:id           body: { name }                                → { folder }
+DELETE /folders/:id                                                         → 204
+
+GET    /notes                 → { notes: [...] }  (includes content)
+POST   /notes                 body: { id?, folder_id?, title, content, updated_at, created_at? } → { note }
+PATCH  /notes/:id             body: { title, content, updated_at }          → { note } or 409 if stale
+PATCH  /notes/:id/move        body: { folder_id }                           → { note }
+DELETE /notes/:id                                                           → 204
+
+PUT    /blobs/:id             (authenticated)  → 201 created / 200 already exists
+GET    /blobs/:id             (unauthenticated) → blob data
 ```
 
-`folder_id` and `note_id` on create messages are optional. If provided, the server uses them; if absent, the server generates a UUID. This lets clients create entities locally with a stable ID and push them later without ID conflicts.
+JWT is accepted as `Authorization: Bearer <token>` header, or `?token=<jwt>` query param (for WebSocket upgrade).
 
-**Server → Client (on connect):**
-```json
-{ "type": "init", "folders": [...], "notes": [...] }
+### WebSocket wire protocol (per note)
+
+```
+GET /notes/:id/ws?token=<jwt>
 ```
 
-**Server → Client (broadcasts after mutations):**
 ```json
-{ "type": "folder_created", "folder": { "id": "...", "name": "...", "created_at": 123 } }
-{ "type": "folder_renamed", "folder": { "id": "...", "name": "...", "created_at": 123 } }
-{ "type": "folder_deleted", "folder_id": "..." }
-{ "type": "note_created",   "note": { "id": "...", "folder_id": "...", "title": "...", ... } }
-{ "type": "note_updated",   "note": { "id": "...", "folder_id": "...", "title": "...", ... } }
-{ "type": "note_moved",     "note": { "id": "...", "folder_id": "...", ... } }
-{ "type": "note_deleted",   "note_id": "..." }
+// Server → client on connect
+{ "type": "init", "title": "...", "content": "...", "updated_at": 123 }
+
+// Client → server on keystroke
+{ "type": "update", "title": "...", "content": "...", "updated_at": 123 }
+
+// Server → all other clients watching this note
+{ "type": "update", "title": "...", "content": "...", "updated_at": 123 }
 ```
 
-Create responses are sent to originating client **and** broadcast to others.
-If the client already has the entity (matched by ID), the echo is a no-op.
-Update/move/delete responses are broadcast to others only.
+Server applies last-write-wins: only accepts and rebroadcasts if `updated_at` is strictly greater than stored.
+Ping/pong keepalive: 30 s interval, 60 s read deadline. Zombie connections are cleaned up automatically.
 
-### File layout
+### Internal packages
+
 ```
 server/
-├── main.go        ← HTTP setup + WebSocket upgrade loop + blob route
-├── model.go       ← Folder, Note, Msg types
-├── store.go       ← in-memory store + atomic JSON persistence
-├── hub.go         ← WebSocket hub + message dispatch
-├── blobs.go       ← PUT/GET /blobs/:id — idempotent upload, content-type detection
-└── store_test.go  ← 20 unit tests
+├── main.go                  ← thin wiring, graceful shutdown, reset-password subcommand
+├── server_test.go           ← 25 integration tests
+└── internal/
+    ├── db/                  ← SQLite open, migrations, JWT secret, NewID
+    ├── auth/                ← register, login, recover handlers + JWT middleware
+    ├── folders/             ← folder CRUD handlers
+    ├── notes/               ← note CRUD handlers + per-note WebSocket hub
+    └── blobs/               ← blob upload/download handlers
 ```
 
-### Persistence
-- File: `server/data.json`
-- Format: `{ "folders": [...], "notes": [...] }`
-- Writes are atomic (write to temp file, then `os.Rename`) — no partial-write corruption
-- Writes are synchronous per mutation (fast enough; avoids race conditions from async goroutines)
-
 ### Deployment (Raspberry Pi)
-- Architecture: `aarch64` (64-bit ARM)
-- Build on Mac: `GOOS=linux GOARCH=arm64 go build -o amadeuz-server .`
+
+- Build: `GOOS=linux GOARCH=arm64 go build -o amadeuz-server .`
 - Copy: `scp amadeuz-server pi@<PI_IP>:/opt/amadeuz/amadeuz-server`
-- Binary location: `/opt/amadeuz/amadeuz-server`
 - Managed by systemd: `sudo systemctl restart amadeuz`
+- DB path override: `AMADEUZ_DB=/data/amadeuz.db ./amadeuz-server`
 - Logs: `sudo journalctl -u amadeuz -f`
 
-### Dependencies (current)
-- `github.com/gorilla/websocket`
+### Dependencies
 
-### Dependencies (planned additions)
-- `modernc.org/sqlite` — pure Go SQLite, no CGO
-- `go-chi/chi` — lightweight router with URL parameters
-- `golang-jwt/jwt` — JWT sign/verify
+- `github.com/go-chi/chi/v5` — router
+- `github.com/golang-jwt/jwt/v5` — JWT sign/verify
+- `golang.org/x/crypto/bcrypt` — password hashing
+- `modernc.org/sqlite` — pure Go SQLite
+- `github.com/gorilla/websocket` — WebSocket
 
 ---
 
 ## macOS (Swift + SwiftUI)
 
-**Status:** Phase 2b complete + offline-first create + inline images + Markdown styling (2026-03-11)
+**Status:** Phase 2a complete — user accounts, JWT auth, REST sync, per-note WebSocket live sync, recovery codes.
 **Location:** `notes/mac/`
 **Run:** `cd notes/mac && swift run`
 **Requires:** Xcode command-line tools + accepted license (`sudo xcodebuild -license`)
 
 ### What it does
-- Three-column `NavigationSplitView`: folder list | note list | note editor
-- Create/rename/delete folders (context menu on folder rows)
-- Create/delete notes (toolbar button + context menu)
-- Notes do not require a folder — can be created from "All Notes" view directly
-- Move note to a different folder (or to no folder) via right-click → "Move to Folder" submenu
-- Note list sorted by `updatedAt` descending, with title, date, content preview, and folder label
-- Folder label shown in note row (folder icon + name); shows "—" if note has no folder (keeps row height constant)
-- Search field (top-right toolbar) filters notes by title or content; auto-switches to "All Notes" when typing
-- Rich Markdown editor (`MarkdownEditor.swift`): inline images via drag & drop or paste, Markdown styling for headers (`#`, `##`, `###`), bullets (`-`), and checkboxes (`- [ ]`, `- [x]`)
-- Images stored as `![](amadeuz://blob/<uuid>)` in note content; binary data managed by `BlobStore`
-- Offline image support: blob saved locally and queued for upload the moment it is inserted; upload fires in background and retries on reconnect
-- Full offline-first: loads `data.json` on startup, works without server
-- Create notes and folders while offline — they appear immediately, saved to disk, pushed to server on reconnect
-- Debounce: 500ms after last change to title or content → save locally + push to server
-- Per-note last-write-wins merge on reconnect (push local if ahead)
-- Local-only folders and notes created offline are pushed to server on reconnect (not dropped)
-- Auto-reconnect every 3 seconds; green/red status dot in toolbar
+
+- Login / Register / Recover screen with segmented control (shown before main UI)
+- Recovery code displayed in a sheet after register or recover — shown once, copy button provided
+- Three-column `NavigationSplitView`: folder list | note list | note editor (shown after login)
+- Sign Out accessible from app menu (macOS menu bar → Notes → Sign Out); disabled when not logged in
+- All CRUD (folders, notes) via REST; 500 ms debounced note content changes via REST PATCH
+- Per-note WebSocket opens when a note is selected — receives live updates from other clients
+- Full sync on login/reconnect: merges server state with local by last-write-wins, pushes any offline-created or locally-newer items
+- Offline-first: local state updated immediately; REST calls fire in background; full sync on reconnect catches up
+- JWT stored in macOS Keychain; survives app restart without re-login
+- Server address format: `http://localhost:8080` (old `ws://` format auto-migrated on first launch)
+- Inline images (drag & drop / paste), Markdown styling, offline blob queue — unchanged from Phase 2b
 
 ### Local storage
+
 `~/Library/Application Support/amadeuz/data.json`
 ```json
 { "folders": [...], "notes": [...] }
 ```
 
 ### Settings storage
-`UserDefaults` — key `"serverAddress"`
-Default server: `ws://localhost:8080/ws`
+
+`UserDefaults` — key `"serverAddress"`. Default: `http://localhost:8080`
 
 ### Key files
+
 | File | Role |
 |------|------|
-| `NoteApp.swift` | `@main` entry; `AppDelegate` forces foreground activation (SPM quirk) |
-| `Models.swift` | `Folder`, `Note`, `WSMsg` — all types + Codable conformance |
-| `ContentView.swift` | `NavigationSplitView` with `FolderSidebar`, `NoteList`, `NoteEditor` |
-| `NoteViewModel.swift` | `NotesViewModel` — state, selection management, debounce, sync |
-| `MarkdownEditor.swift` | `NSTextView`-based rich editor: inline images (paste/drop), Markdown styling, blob insertion |
-| `BlobStore.swift` | Local blob cache (`~/Library/Application Support/amadeuz/blobs/`), pending upload queue, `PUT /blobs/:id` HTTP sync |
+| `NoteApp.swift` | `@main` entry; `@StateObject vm` owned here; `.commands` adds Sign Out to app menu |
+| `AuthView.swift` | Login / Register / Recover UI; `RecoveryCodeView` sheet |
+| `KeychainStore.swift` | Save, load, delete JWT from macOS Keychain |
+| `APIClient.swift` | All REST calls + WebSocket URL builder; `APIError` carries server message |
+| `Models.swift` | `Folder`, `Note`, `AuthResponse`, `NoteWsMsg` |
+| `ContentView.swift` | Auth gate; `NavigationSplitView`; recovery code sheet at root level |
+| `NoteViewModel.swift` | `@MainActor NotesViewModel` — auth state, `fullSync()`, REST CRUD, per-note WS lifecycle |
+| `SyncService.swift` | `NoteSync` — per-note WebSocket, receive-only (init + update), auto-reconnect |
+| `BlobStore.swift` | Local blob cache, pending upload queue, authenticated `PUT /blobs/:id` |
 | `LocalStore.swift` | Read/write `data.json` (folders + notes) in Application Support |
-| `SyncService.swift` | `URLSessionWebSocketTask` wrapper, generic `WSMsg` handler, auto-reconnect |
-
-### Selection + debounce design
-- `NotesViewModel` tracks `editingNoteID` (private) separate from `selectedNoteID` (published)
-- `noteSelectionChanged(from:to:)` flushes pending changes to outgoing note, loads incoming note
-- Called from view's `.onChange(of: vm.selectedNoteID)` — view is the trigger, not Combine
-- Debounce uses `Publishers.CombineLatest($editingTitle, $editingContent)` — fires 500ms after last change to either field
+| `MarkdownEditor.swift` | `NSTextView`-based rich editor: inline images (paste/drop), Markdown styling |
 
 ### Known quirks
+
 - SPM executables don't activate as foreground apps by default. Fixed with `AppDelegate`:
   `NSApp.setActivationPolicy(.regular)` + `NSApp.activate(ignoringOtherApps: true)`
+- Recovery code sheet is attached to `ContentView`'s root view (not `AuthView`) so it survives the auth state transition that removes `AuthView` from the hierarchy
 
 ---
 

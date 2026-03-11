@@ -1,25 +1,30 @@
 import Foundation
 
-/// Manages a WebSocket connection to the sync server.
-/// Automatically reconnects when the connection drops.
-final class SyncService {
+/// WebSocket connection for a single note's live sync.
+///
+/// Receives `init` and `update` messages from the server.
+/// Content updates are sent via REST (PATCH /notes/:id), not WebSocket;
+/// this connection only exists to receive changes from other clients.
+final class NoteSync {
     private let url: URL
     private var task: URLSessionWebSocketTask?
     private var alive = true
 
-    private let onMessage: (WSMsg) -> Void
+    private let onInit:             (NoteWsMsg) -> Void
+    private let onUpdate:           (NoteWsMsg) -> Void
     private let onConnectionChange: (Bool) -> Void
 
-    private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     init(
         url: URL,
-        onMessage: @escaping (WSMsg) -> Void,
+        onInit:             @escaping (NoteWsMsg) -> Void,
+        onUpdate:           @escaping (NoteWsMsg) -> Void,
         onConnectionChange: @escaping (Bool) -> Void
     ) {
-        self.url = url
-        self.onMessage = onMessage
+        self.url               = url
+        self.onInit            = onInit
+        self.onUpdate          = onUpdate
         self.onConnectionChange = onConnectionChange
         connect()
     }
@@ -45,10 +50,14 @@ final class SyncService {
             case .success(let message):
                 if case .string(let text) = message,
                    let data = text.data(using: .utf8),
-                   let msg = try? self.decoder.decode(WSMsg.self, from: data)
+                   let msg = try? self.decoder.decode(NoteWsMsg.self, from: data)
                 {
                     self.onConnectionChange(true)
-                    self.onMessage(msg)
+                    switch msg.type {
+                    case "init":   self.onInit(msg)
+                    case "update": self.onUpdate(msg)
+                    default: break
+                    }
                 }
                 self.receive()
 
@@ -60,15 +69,5 @@ final class SyncService {
                 }
             }
         }
-    }
-
-    // MARK: - Public
-
-    func send(_ msg: WSMsg) {
-        guard
-            let data = try? encoder.encode(msg),
-            let text = String(data: data, encoding: .utf8)
-        else { return }
-        task?.send(.string(text)) { _ in }
     }
 }

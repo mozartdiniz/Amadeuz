@@ -1531,4 +1531,117 @@ The macOS client now has:
 - Offline-first blob store with automatic retry on reconnect
 - No note data loss on create
 
+---
+
+## March 11, 2026 — Planning Phase 2a: auth strategy and the password recovery decision
+
+### The plan going forward
+
+Decided to focus Phase 2a on server + macOS only, validate the architecture end-to-end, then bring parity to Windows, Linux, iOS, and Android. Building auth across five platforms simultaneously before the design is proven would multiply the cost of every wrong decision.
+
+### Password recovery without email
+
+The first real product decision of Phase 2a: how do users recover a forgotten password without involving email?
+
+Email is off the table. It requires SMTP infrastructure (or a third-party email service), which is a self-hosting burden and an external dependency — exactly the kind of thing the target user is trying to avoid. The audience for Amadeuz is people who run their own infrastructure precisely because they don't want to trust third parties. Adding a dependency on Mailgun or asking them to configure Postfix defeats the purpose.
+
+Researched how other self-hosted projects handle this:
+
+- **Nextcloud** and **Gitea/Forgejo**: CLI reset that talks directly to the database. No email required. This is the documented recommended path, not a workaround.
+- **Miniflux**: email reset was never built at all. CLI reset is the only method. Cleanest implementation reviewed.
+- **Vaultwarden** and **Standard Notes**: no viable recovery path. The master password is the encryption key derivation input — resetting it destroys the vault. Their honest answer is "keep an export."
+
+The Vaultwarden/Standard Notes problem is only relevant when you tie encryption keys to passwords (Phase 2c). For Phase 2a (plaintext SQLite, auth only), the right model is Gitea/Miniflux: CLI reset + recovery codes.
+
+**Decision:** Recovery code at registration. The server generates a high-entropy random string on signup. The user saves it. Presenting the code lets them reset the password. Admin CLI reset (`amadeuz-server reset-password --user ...`) as a last resort.
+
+> 📝 The research surfaced something interesting: Miniflux deliberately never built email reset. It's a choice, not an oversight. There's something appealing about a tool that's honest about what it is and who it's for.
+
+### Why E2E encryption matters more than it seems
+
+Also clarified the threat model for E2E encryption. On a LAN (Raspberry Pi at home), E2E is a nice-to-have — you own the physical network. But the more common deployment pattern is a VPS somewhere on the internet so you can access your notes from your phone on the go.
+
+On a VPS, the hosting provider has root access to the machine and the SQLite file. Without E2E, moving off iCloud to avoid Apple reading your notes just trades Apple for Hetzner (or AWS, or DigitalOcean). The server stores plaintext. Legal orders to the hosting company produce everything.
+
+E2E encryption is what makes the VPS deployment honest about its privacy promise. The hosting company stores ciphertext they can't read. Keys never leave the user's devices. This is why the privacy-conscious audience will trust the product with sensitive content — not just shopping lists, but medical notes, private journals, credentials.
+
+E2E is not deferred because it's a nice feature. It's deferred (to Phase 2c) because the auth layer needs to exist first — you can't wrap keys per user before users exist. The sequencing is forced, not a choice to skip it.
+
+### Where things stand
+
+Phase 2a is ready to start:
+- Server: SQLite migration, modular monolith restructure, JWT auth, register/login endpoints
+- macOS: login/register UI, JWT in Keychain, updated wire protocol
+- Recovery: codes at registration, CLI reset as last resort
+- No email, ever
+
 The other platforms (Windows, Linux, iOS, Android) still use a plain `TextEditor`/`GtkTextView`/`UITextView` with no image or Markdown support. Images and Markdown are currently macOS-only.
+
+---
+
+## March 11, 2026 — Phase 2a: user accounts, the server rewrite, and the macOS client
+
+### The server rewrite
+
+The Phase 2a server is a complete replacement of the Phase 2b prototype. The old server was a single file with an in-memory store and one WebSocket endpoint. The new server is a modular Go monolith: `internal/db`, `internal/auth`, `internal/notes`, `internal/folders`, `internal/blobs`. SQLite replaces the JSON file. JWT replaces "everyone shares the same notes."
+
+The restructuring was significant but not complicated. Go's `internal/` package boundary does the right thing — the packages can't be imported from outside the module, which keeps the boundary honest. `main.go` is now thin: open DB, wire handlers, start server, wait for signal, drain.
+
+A few decisions made during the server build:
+
+**SQLite via `modernc.org/sqlite`**, not the standard `mattn/go-sqlite3`. The reason is pure Go — no CGO means the binary cross-compiles cleanly to ARM64 for Raspberry Pi without needing a C toolchain on the build machine. One `GOOS=linux GOARCH=arm64 go build` and it's done.
+
+One gotcha: `modernc.org/sqlite` does not honor DSN query parameters reliably. Setting `_foreign_keys=on` in the connection string silently does nothing. `PRAGMA foreign_keys = ON` must be executed as a separate `Exec` call after opening. This took a failing test (`TestFolderDeleteCascadesNotes`) to surface. Similarly, two PRAGMAs cannot be combined in a single multi-statement `Exec` — only the first one runs. Split into separate calls.
+
+**JWT via query param for WebSocket auth.** The WebSocket upgrade is just an HTTP GET. Many client environments (including `URLSessionWebSocketTask` on Apple platforms) do not support custom headers on upgrade requests. The `Authorization: Bearer` header is the right pattern for REST. For WebSocket, `?token=<jwt>` in the URL is the pragmatic choice — universally supported, JWT is already signed so there is no risk of tampering.
+
+**No email for password recovery.** This decision was researched rather than assumed. Looked at how Nextcloud, Gitea, Miniflux, Vaultwarden, and Standard Notes handle this. The pattern for self-hosted tools with privacy-conscious users converges on CLI reset + recovery codes. Miniflux never built email reset at all — it is a deliberate choice, not an oversight. The recovery code model fits: one high-entropy code generated at registration, shown to the user once, stored somewhere safe (password manager, printed paper). Using the code consumes it and issues a new one. No external service, no DNS records, no SMTP configuration, no third-party dependency.
+
+**Recovery codes are single-use.** This matters: a recovery code that can be reused is a second password that never expires. Rotating the code on each use limits the exposure window. If the code is compromised and used by an attacker, the legitimate user's next recovery attempt fails — which is a signal that something went wrong.
+
+### 25 tests before touching the client
+
+Before starting the macOS rewrite, a full integration test suite was written — 25 tests covering every endpoint and every failure path. Auth, folder CRUD, note CRUD, blob upload/download, last-write-wins, user isolation, cascade delete, recovery code rotation, stale timestamp rejection, CLI password reset. All green.
+
+The process of writing tests surfaced two real bugs: the PRAGMA ordering issue described above, and a missing import in `notes/handler.go` that caused a build error when the ping goroutine was first added. Both would have been painful to debug in a running server.
+
+> 📝 *This is the first time in this project that the test suite ran cleanly before a single line of client code was written. How did that change the confidence level going into the macOS rewrite?*
+
+### The macOS rewrite
+
+The macOS client was a complete rewrite. The old client used a single WebSocket for everything — all CRUD operations went through a typed message bus. The new architecture is:
+
+- REST for all mutations (create/rename/delete folder, create/update/move/delete note)
+- One WebSocket per open note, for live keystroke sync only
+- `@MainActor` on `NotesViewModel` — all state mutation on the main actor, async network calls suspend and release the actor during I/O
+
+The protocol split (REST + per-note WS) is cleaner than the single-bus design. REST is stateless, works with standard HTTP tooling, and maps naturally to the offline queue pattern — if a mutation fails, retry it later. The WebSocket is reserved for the one use case where request/response latency actually matters: seeing someone else's keystrokes appear in real time.
+
+New files: `KeychainStore.swift` (macOS Keychain wrapper for JWT), `APIClient.swift` (typed REST client), `AuthView.swift` (login/register/recover UI). The old `SyncService.swift` became `NoteSync` — a receive-only per-note WebSocket that auto-reconnects and delivers `init` and `update` messages to the view model.
+
+### Three bugs caught during testing
+
+**Recovery code never shown.** The `AuthView` registered a new user, `applyToken()` set `isAuthenticated = true`, which immediately removed `AuthView` from the hierarchy. The sheet for showing the recovery code was attached to `AuthView`, so it never had a chance to appear. Fix: set `pendingRecoveryCode` on the view model *before* calling `applyToken`. Move the sheet to `ContentView`'s root — it's always in the hierarchy regardless of auth state.
+
+**Previous user's data visible after account recovery.** After recovering a password (and therefore logging in), the main screen showed notes from whoever was logged in before. The cause: `fullSync()` merges server state with *local* state. If the local state hasn't been cleared, the previous user's notes are treated as "locally-created" and pushed to the new account. Fix: `applyToken()` clears `folders`, `notes`, the editor, and the local store file before running `fullSync`. This path (active authentication) is distinct from the init path (resuming a session), so offline notes are unaffected.
+
+**400 error on recover.** The server's `/auth/recover` endpoint requires three fields: `email`, `recovery_code`, and `new_password`. The client was only sending two. The `AuthView` also had no "New Password" field in recover mode. The fix required updating `APIClient`, `NoteViewModel`, and `AuthView` together — a reminder that API contracts need to be read carefully before building the client.
+
+### The error message improvement
+
+One last detail: registering with an email that already exists showed "Update conflict" in the UI. The server actually returns the message "email already registered". The `APIError.conflict` case was carrying a hardcoded string.
+
+Fixed by passing the server's plain-text response body through to the error. This is a general mechanism — any future 409 from the server will show the right message without needing client-side string logic.
+
+> 📝 *There's something to write about here: the value of reading error responses instead of mapping status codes to strings. The server already has the right words. The client just needs to not throw them away.*
+
+### Where things stand
+
+Phase 2a is complete on server and macOS:
+- New user can register, receive a recovery code, create notes and folders, log out, log back in
+- Recovery flow works end-to-end: use the code, get a new password, new recovery code issued
+- Notes sync across clients via REST + per-note WebSocket
+- Offline-first: create notes without a server, push on reconnect
+- All 25 server integration tests passing
+
+The other platforms (Windows, Linux, iOS, Android) still use the Phase 2b architecture — single WS endpoint, no auth. Phase 2a parity for those platforms is the next major milestone before Phase 2c (E2E encryption) can begin.

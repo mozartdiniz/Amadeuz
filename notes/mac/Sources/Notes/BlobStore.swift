@@ -12,6 +12,9 @@ final class BlobStore {
     private var serverBase: String
     private var pendingIDs: Set<String>
 
+    /// JWT token used for authenticated uploads. Set by NoteViewModel after login.
+    var token: String?
+
     init(serverBase: String) {
         self.serverBase = serverBase
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -54,6 +57,9 @@ final class BlobStore {
         var req = URLRequest(url: url)
         req.httpMethod = "PUT"
         req.httpBody = data
+        if let tok = token {
+            req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
+        }
         let (_, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse,
               http.statusCode == 200 || http.statusCode == 201 else {
@@ -97,16 +103,5 @@ final class BlobStore {
 
     private func cacheURL(for id: String) -> URL {
         cacheDir.appendingPathComponent(id)
-    }
-}
-
-// MARK: - Derive HTTP base from WebSocket URL
-
-extension BlobStore {
-    static func httpBase(from wsURL: String) -> String {
-        wsURL
-            .replacingOccurrences(of: "wss://", with: "https://")
-            .replacingOccurrences(of: "ws://", with: "http://")
-            .components(separatedBy: "/ws").first ?? wsURL
     }
 }

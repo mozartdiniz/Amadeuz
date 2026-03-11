@@ -3,20 +3,33 @@ import SwiftUI
 // MARK: - Root
 
 struct ContentView: View {
-    @StateObject private var vm = NotesViewModel()
+    @EnvironmentObject private var vm: NotesViewModel
     @State private var showSettings = false
 
     var body: some View {
-        NavigationSplitView {
-            FolderSidebar(vm: vm)
-        } content: {
-            NoteList(vm: vm)
-        } detail: {
-            NoteEditor(vm: vm, showSettings: $showSettings)
+        Group {
+            if vm.isAuthenticated {
+                NavigationSplitView {
+                    FolderSidebar(vm: vm)
+                } content: {
+                    NoteList(vm: vm)
+                } detail: {
+                    NoteEditor(vm: vm, showSettings: $showSettings)
+                }
+                .searchable(text: $vm.searchText, placement: .toolbar, prompt: "Search notes")
+                .sheet(isPresented: $showSettings) {
+                    SettingsView(vm: vm)
+                }
+            } else {
+                AuthView(vm: vm)
+            }
         }
-        .searchable(text: $vm.searchText, placement: .toolbar, prompt: "Search notes")
-        .sheet(isPresented: $showSettings) {
-            SettingsView(serverAddress: $vm.serverAddress)
+        // Shown after register/recover regardless of which view is active.
+        .sheet(item: Binding(
+            get: { vm.pendingRecoveryCode.map { RecoveryCodePresentation(code: $0) } },
+            set: { if $0 == nil { vm.pendingRecoveryCode = nil } }
+        )) { p in
+            RecoveryCodeView(code: p.code)
         }
     }
 }
@@ -258,7 +271,7 @@ private struct NoteEditor: View {
 // MARK: - Settings sheet
 
 struct SettingsView: View {
-    @Binding var serverAddress: String
+    @ObservedObject var vm: NotesViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
 
@@ -267,18 +280,25 @@ struct SettingsView: View {
             Text("Server")
                 .font(.headline)
 
-            LabeledContent("WebSocket URL") {
-                TextField("ws://hostname:8080/ws", text: $draft)
+            LabeledContent("Server URL") {
+                TextField("http://hostname:8080", text: $draft)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 280)
             }
 
+            Divider()
+
             HStack {
+                Button("Sign Out", role: .destructive) {
+                    vm.logout()
+                    dismiss()
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Connect") {
-                    serverAddress = draft
+                Button("Save") {
+                    let normalized = NotesViewModel.normalizeServerAddress(draft)
+                    vm.serverAddress = normalized
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -287,6 +307,6 @@ struct SettingsView: View {
         }
         .padding(24)
         .frame(width: 420)
-        .onAppear { draft = serverAddress }
+        .onAppear { draft = vm.serverAddress }
     }
 }
