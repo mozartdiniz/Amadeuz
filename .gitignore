@@ -5,6 +5,7 @@ server/note.json
 go.sum
 /server/amadeuz
 /server/amadeuz.exe
+/server/blobs/
 
 # ── Swift / SPM ───────────────────────────────────────────────────────────────
 .build/

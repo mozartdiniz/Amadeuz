@@ -30,6 +30,7 @@ final class NotesViewModel: ObservableObject {
     @Published var serverAddress: String {
         didSet {
             UserDefaults.standard.set(serverAddress, forKey: "serverAddress")
+            blobStore.updateServerBase(BlobStore.httpBase(from: serverAddress))
             reconnect()
         }
     }
@@ -58,6 +59,7 @@ final class NotesViewModel: ObservableObject {
     // MARK: - Private
 
     private let localStore = LocalStore()
+    private(set) var blobStore: BlobStore
     private var syncService: SyncService?
     private var cancellables = Set<AnyCancellable>()
 
@@ -68,8 +70,10 @@ final class NotesViewModel: ObservableObject {
     // MARK: - Init
 
     init() {
-        serverAddress = UserDefaults.standard.string(forKey: "serverAddress")
+        let savedAddress = UserDefaults.standard.string(forKey: "serverAddress")
             ?? "ws://localhost:8080/ws"
+        serverAddress = savedAddress
+        blobStore = BlobStore(serverBase: BlobStore.httpBase(from: savedAddress))
 
         let saved = localStore.load()
         folders = saved.folders

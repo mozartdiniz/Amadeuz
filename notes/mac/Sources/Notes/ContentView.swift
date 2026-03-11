@@ -166,8 +166,13 @@ private struct NoteRow: View {
     }
 
     private var preview: String {
-        let trimmed = note.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "No additional text" : trimmed
+        let text = note.content
+            .replacingOccurrences(of: #"!\[[^\]]*\]\(amadeuz://blob/[a-f0-9\-]+\)"#,
+                                  with: "",
+                                  options: .regularExpression)
+            .replacingOccurrences(of: #"\n{2,}"#, with: "\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "No additional text" : text
     }
 
     private var dateString: String {
@@ -227,10 +232,8 @@ private struct NoteEditor: View {
 
                     Divider()
 
-                    TextEditor(text: $vm.editingContent)
-                        .font(.body)
-                        .padding(16)
-                        .scrollContentBackground(.hidden)
+                    MarkdownEditor(markdown: $vm.editingContent, blobStore: vm.blobStore)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .background(.windowBackground)
             }

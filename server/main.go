@@ -15,6 +15,10 @@ var upgrader = websocket.Upgrader{
 func main() {
 	s := newStore("data.json")
 	h := newHub(s)
+	bs := newBlobStore("blobs")
+
+	http.HandleFunc("/blobs/", bs.Download)
+	http.HandleFunc("/blobs", bs.Upload)
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
