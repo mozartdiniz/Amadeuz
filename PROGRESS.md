@@ -33,11 +33,15 @@
 | Folders (create / rename / delete) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | "All Notes" view | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Default folder bootstrap | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Drawer/sidebar navigation | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Create / delete notes | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Note list with title, date, preview | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Unfoldered notes (folder optional) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Create note from "All Notes" view | — | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Move note between folders | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Folder label in note list row | — | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Search / filter notes | — | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **User accounts / JWT auth** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -51,9 +55,12 @@
 **Run:** `cd server && go mod tidy && go run .`
 **Port:** `8080` on all interfaces (`0.0.0.0`)**Tests:** `cd server && go test ./...` (20 unit tests, all passing)
 
+
 ### Current state (Phase 2b)
 - Single WebSocket endpoint at `/ws`, no auth
 - Full folder + note CRUD over WebSocket messages (see wire protocol below)
+- Notes do not require a folder — `folder_id` is optional on `create_note`
+- `move_note` message moves a note to a different folder (or removes it from all folders)
 - In-memory store + atomic disk persistence to `server/data.json`
 - On new client connect: sends `init` with all folders and all notes (including content)
 - Last-write-wins per note (timestamp compare), cascade delete when folder is deleted
@@ -65,8 +72,10 @@
 { "type": "create_folder", "name": "Work" }
 { "type": "rename_folder", "folder_id": "...", "name": "Work Projects" }
 { "type": "delete_folder", "folder_id": "..." }
+{ "type": "create_note",   "title": "My Note" }               ← folder_id optional; omit for unfoldered
 { "type": "create_note",   "folder_id": "...", "title": "My Note" }
 { "type": "update_note",   "note_id": "...", "title": "...", "content": "...", "updated_at": 123456 }
+{ "type": "move_note",     "note_id": "...", "folder_id": "..." }  ← folder_id empty = no folder
 { "type": "delete_note",   "note_id": "..." }
 ```
 
@@ -82,11 +91,12 @@
 { "type": "folder_deleted", "folder_id": "..." }
 { "type": "note_created",   "note": { "id": "...", "folder_id": "...", "title": "...", ... } }
 { "type": "note_updated",   "note": { "id": "...", "folder_id": "...", "title": "...", ... } }
+{ "type": "note_moved",     "note": { "id": "...", "folder_id": "...", ... } }
 { "type": "note_deleted",   "note_id": "..." }
 ```
 
 Create responses are sent to originating client **and** broadcast to others (client needs the server-assigned ID).
-Update/delete responses are broadcast to others only (sender already updated locally).
+Update/move/delete responses are broadcast to others only (sender already updated locally).
 
 ### File layout
 ```
@@ -124,7 +134,7 @@ server/
 
 ## macOS (Swift + SwiftUI)
 
-**Status:** Phase 2b complete — folders + multiple notes, three-column layout
+**Status:** Phase 2b complete + UX improvements (2026-03-11)
 **Location:** `notes/mac/`
 **Run:** `cd notes/mac && swift run`
 **Requires:** Xcode command-line tools + accepted license (`sudo xcodebuild -license`)
@@ -133,7 +143,11 @@ server/
 - Three-column `NavigationSplitView`: folder list | note list | note editor
 - Create/rename/delete folders (context menu on folder rows)
 - Create/delete notes (toolbar button + context menu)
-- Note list sorted by `updatedAt` descending, with title, date, and content preview
+- Notes do not require a folder — can be created from "All Notes" view directly
+- Move note to a different folder (or to no folder) via right-click → "Move to Folder" submenu
+- Note list sorted by `updatedAt` descending, with title, date, content preview, and folder label
+- Folder label shown in note row (folder icon + name); hidden if note has no folder
+- Search field (top-right toolbar) filters notes by title or content; auto-switches to "All Notes" when typing
 - Full offline-first: loads `data.json` on startup, works without server
 - Debounce: 500ms after last change to title or content → save locally + push to server
 - Per-note last-write-wins merge on reconnect (push local if ahead)

@@ -1177,3 +1177,114 @@ major platform before auth is added.
 > Apple (macOS + iOS), Android, Windows, Linux? Was that the original plan, or did it
 > evolve? What is the actual end-user scenario you're imagining when all of these sync
 > together?*
+
+---
+
+## March 11, 2026 — Note organisation: folders become optional, move, search
+
+### What we built today
+
+Four features, all on the same theme: making notes easier to organise and find without
+imposing structure on the user.
+
+**1. Folders are now optional**
+
+Until today, creating a note required selecting a folder first. There was no way to
+just open the app and start writing — you had to pick (or create) a folder, then
+create a note inside it.
+
+The fix was smaller than expected. On the server, `CreateNote` previously checked that
+the given `folder_id` referred to an existing folder and rejected the creation if not.
+Removing that check and letting `folder_id` be an empty string was the entire server
+change. The `create_note` message no longer requires `folder_id`.
+
+On the Mac client, the "New Note" toolbar button was disabled when "All Notes" was
+selected. Removing that condition and teaching `createNote()` to send no `folder_id`
+when in the "All Notes" view was enough. Notes with no folder appear in "All Notes"
+and in no specific folder — exactly the right behaviour.
+
+We also removed a piece of bootstrap logic that had been quietly creating a default
+"Notes" folder on first server connect. That was there precisely because notes
+required a folder. Without the requirement, the bootstrap has no reason to exist.
+
+> 📝 *Write here: did the "folder required" design ever bother you during testing?
+> Was there a specific moment — trying to jot something down quickly and having to
+> stop and make a folder first — that made this feel like real friction?*
+
+**2. Move note between folders**
+
+Notes can now be moved from one folder to another, or back to "no folder", via
+right-click → "Move to Folder" → submenu. The first item is always "No Folder".
+Below a divider are all existing folders.
+
+This required a new wire message pair: `move_note` (client → server) and
+`note_moved` (server → all clients). The decision to not reuse `update_note` for
+this was deliberate. A move changes `folder_id` only, not content. Using
+`update_note` would force the client to send the full note content just to change
+the folder, and the last-write-wins timestamp guard could theoretically reject
+a move if a concurrent content edit came in first. A dedicated message is cleaner
+and semantically unambiguous.
+
+The move also bumps `updated_at` so that all other clients receive and apply it
+correctly through the existing last-write-wins flow.
+
+**3. Folder label in note rows**
+
+Each note row in the list now has a third line (below the content preview) showing
+the folder name with a folder icon. If the note has no folder, nothing is shown —
+the row simply has two lines instead of three. No placeholder, no empty space.
+
+The implementation is a `folderName: String?` parameter on `NoteRow`, resolved at
+the call site with a single lookup: `vm.folders.first { $0.id == note.folderID }?.name`.
+Returns `nil` for empty `folderID` naturally. A simple `if let folderName` conditional
+renders the third line only when there is something to show.
+
+**4. Search**
+
+A search field in the top-right toolbar filters the note list as you type. Matching
+is a case-insensitive substring check against both title and content.
+
+When you start typing, the app automatically switches to "All Notes" so the search
+runs across the entire collection, not just the currently selected folder. The folder
+sidebar stays visible — you can see which folder each result belongs to via the new
+folder label in the row.
+
+The implementation is entirely client-side. `searchText` as a `@Published` property
+on `NotesViewModel` with a `didSet` that flips `selectedFolderID` to `allNotesID`
+when non-empty. The `notesInSelectedFolder` computed property applies the search
+filter after the folder filter. SwiftUI's `.searchable()` modifier places the native
+search field in the toolbar with no manual layout work.
+
+Server-side full-text search is not needed yet — all notes are in memory on the
+client and the filter is instant.
+
+> 📝 *Write here: is there a moment when client-side search stops being sufficient?
+> When you picture this app with thousands of notes across multiple users, what
+> breaks first — the memory, the performance, or something else?*
+
+### What these features have in common
+
+All four features are about reducing friction. Creating a note shouldn't require
+picking a folder. Finding a note shouldn't require knowing where you put it.
+Moving a note shouldn't require drag and drop.
+
+These are the kinds of details that make the difference between an app you
+actually use and one you abandon after a week. They don't make a good demo.
+They make a good tool.
+
+> 📝 *Write here: are there other places in the current app where you feel similar
+> friction — a step that shouldn't be required, a button that's disabled when it
+> shouldn't be, a flow that forces you to think about the app's structure instead
+> of what you want to do?*
+
+### Where things stand
+
+The macOS client now has the full feature set for comfortable single-user use:
+folders, unfoldered notes, move, search, offline-first sync. The server supports
+all of it.
+
+The other clients (Windows, Linux, iOS, Android) are behind on these four features
+— they still require a folder to create a note, have no move capability, no folder
+label in the list, and no search. These are the next things to port when attention
+turns to those platforms.
+
