@@ -9,6 +9,7 @@ Native Linux notes app built with C++20 + GTK4. Offline-first, syncs over WebSoc
 - GTK 4
 - libsoup 3 (WebSocket client)
 - json-glib
+- libsecret (keychain integration)
 
 ### Install Dependencies
 
@@ -22,7 +23,8 @@ sudo apt install \
   pkg-config \
   libgtk-4-dev \
   libsoup-3.0-dev \
-  libjson-glib-dev
+  libjson-glib-dev \
+  libsecret-1-dev
 ```
 
 **Fedora / RHEL:**
@@ -34,7 +36,8 @@ sudo dnf install \
   pkgconfig \
   gtk4-devel \
   libsoup3-devel \
-  json-glib-devel
+  json-glib-devel \
+  libsecret-devel
 ```
 
 **Arch Linux:**
@@ -45,7 +48,8 @@ sudo pacman -S \
   cmake \
   gtk4 \
   libsoup3 \
-  json-glib
+  json-glib \
+  libsecret
 ```
 
 ## Build & Run
