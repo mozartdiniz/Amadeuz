@@ -1711,3 +1711,100 @@ The Linux client now has feature parity with macOS on every Phase 2a feature:
 - Inline images (local blobs; server upload pending)
 
 > 📝 *Write here: the Linux client went from zero to feature parity with macOS in a single focused session (plus a polish session). How does that compare to the Windows client, which took longer? Is GTK4 easier to work with than you expected, or harder? What would you tell someone who is thinking about writing a GTK4 app in C++?*
+
+---
+
+## March 13, 2026 — Linux restart: choosing the GNOME-native stack
+
+### The decision
+
+The C++ GTK4 Linux client was complete — Phase 2a feature parity with macOS, including auth, REST CRUD, per-note WebSocket, search, move note, Markdown styling, and inline images. A working, tested codebase. And we decided to throw it away and start over.
+
+Not because it was broken. Because it was built to prove the feature set, and it did that job. The C++ code was always a proof-of-concept written in the fastest language available that would talk to GTK4 — not the language that makes a long-lived GTK4 app pleasant to maintain. With the features validated, the right time to make a stack decision is before the code grows further, not after.
+
+The decision came after a dedicated research pass: Gemini scanned several GNOME Circle projects (iotas, Fragments, Citations, Wordbook, NewsFlash) and wrote three recommendation documents — an architecture guide, a polish guide, and a refactor plan. The external projects are in `external-projects/` for reference.
+
+### What the research confirmed
+
+The GNOME ecosystem has converged on a clear stack for new apps:
+
+- **Rust** for the language. Memory safety without a GC. First-class `async/await` for WebSocket and REST. gtk4-rs bindings are mature and well-maintained.
+- **Libadwaita** on top of GTK4. Not optional if you want the app to look native on GNOME 42+. `AdwNavigationSplitView`, `AdwToast`, `AdwStatusPage` — these are the standard building blocks.
+- **Blueprint** for UI definitions. The old approach (writing GTK XML by hand, or building the UI in code) is obsolete. Blueprint is declarative, human-readable, and compiles to standard `.ui` XML at build time.
+- **Meson + Cargo** for the build. Meson handles Blueprint compilation, GResource bundling, GSettings schema installation, and Cargo integration.
+- **GSettings** for config. Replaces the custom `settings.json` from the C++ client.
+
+### One important correction to the research
+
+The architecture guide cited **iotas** as a Rust reference. It is not. iotas is pure Python + PyGObject. The patterns look similar at a high level but translate differently into Rust. **Fragments** is the correct Rust reference — it is a mature, production-quality Rust + GTK4 + Libadwaita + Meson application. Its source is in `external-projects/Fragments-main/`.
+
+### What we deferred deliberately
+
+The research recommendations included several things that are correct for a mature GNOME Circle app but premature for a POC:
+
+- **i18n / gettext** — add later, nothing needs to change structurally
+- **Flatpak manifest** — same; add when packaging matters
+- **GNOME Shell Search Provider** — definitely post-POC
+- **SQLite** for local storage — the flat `data.json` format matches all other clients and is sufficient at this scale
+
+GSettings and GResource were *not* deferred — retrofitting those is painful, and starting without them would mean undoing structural decisions later.
+
+### Where things stand
+
+The legacy C++ code is in `legacy-code/linux/` and is not going anywhere. It is the functional specification for the Rust rewrite: every feature it implements, every piece of business logic, every edge case in the sync algorithm — all of it is available to read. The goal of the Rust client is Phase 2a parity: same features, better code foundation.
+
+The next session starts with scaffolding the Meson + Cargo skeleton.
+
+> 📝 *Write here: how does it feel to delete a working codebase? Is there a moment of hesitation, or does it feel obviously correct? The C++ client took real effort — auth, REST, WebSocket, inline images — and it worked. What is the reasoning you'd give a developer who argues "if it works, don't change it"?*
+
+---
+
+## March 13, 2026 — Phase 1: Rust skeleton scaffolded
+
+The Meson + Cargo + Blueprint skeleton is now in `notes/linux/`. This is the first session on the Rust rewrite.
+
+### What was built
+
+The full directory structure is live:
+
+- **`meson.build`** (top-level): declares dependencies, app ID, profile option, delegates to `data/` and `src/` subdirs.
+- **`meson_options.txt`**: single `profile` option (`default` = release, `development` = debug).
+- **`Cargo.toml`**: gtk4-rs 0.10, libadwaita 0.8 (v1_7 features), tokio, reqwest, tokio-tungstenite, secret-service, serde — the full dependency set the app will need, so we're not retrofitting later.
+- **`data/meson.build`**: calls `gnome.compile_blueprints()` on `window.blp`, bundles the output into a GResource, installs the GSettings schema.
+- **`data/ui/window.blp`**: Blueprint file for the main window — `AdwNavigationSplitView` with a sidebar (`ListBox` for notes) and an editor pane (`TextView` with a title `Entry` in the header bar). This is already the full intended layout, not a placeholder.
+- **`data/com.amadeuz.Notes.gschema.xml`**: one key — `server-url` — that's all settings this app needs.
+- **`src/config.rs`**: the `config_var!` macro pattern from Fragments — reads `MESON_APP_ID`, `MESON_DATADIR`, etc. at compile time. This enforces "build through Meson" rather than plain `cargo build`.
+- **`src/main.rs`**: loads the GResource bundle from the installed data path, prints a helpful error with a hint if it's missing, then runs the application.
+- **`src/app.rs`**: `AmzApplication` as an `AdwApplication` subclass. Creates `AmzWindow` on activate, reuses it on subsequent activations.
+- **`src/ui/window.rs`**: `AmzWindow` as an `AdwApplicationWindow` subclass using `CompositeTemplate`. Binds `split_view`, `note_list`, `new_note_button`, `title_entry`, `text_view` as template children. Wires the two menu actions (`win.show-about`, `win.show-preferences`). The About dialog is a real `AdwAboutDialog` with version pulled from `config::VERSION`.
+- **`src/model/`**: `AmzNote` and `AmzFolder` as GObjects with `glib::Properties`. Properties are kebab-case (`folder-id`, `updated-at`, etc.) to match GObject convention. Using `glib::Object::builder()` for construction.
+- **`src/backend/`**: three stub modules — `local_store` (load/save `data.json`, uses `glib::user_data_dir()` to locate `~/.local/share/amadeuz/`), `keyring` (async JWT store/load/delete via secret-service, all returning `Ok(None)` for now), `sync_worker` (empty struct holding server URL + token).
+
+### Decisions made
+
+**Blueprint over XML.** The UI is authored in `.blp` and compiled by `blueprint-compiler` at Meson configure time. The compiled `.ui` XML goes into the build directory and is bundled into the GResource. This keeps the UI source readable and forces correct widget naming from the start.
+
+**GResource from day one.** Loading the template from a GResource path (`/com/amadeuz/Notes/ui/window.ui`) rather than a filesystem path means the dev workflow is `meson install -C build --prefix=$HOME/.local` then run the installed binary. Slightly more friction than `./build/binary`, but it mirrors how the app will actually run, and avoids a class of "works in dev, breaks when installed" bugs.
+
+**GObject models upfront.** `AmzNote` and `AmzFolder` are real GObjects with `#[derive(Properties)]`, not plain structs. The extra boilerplate now pays off later when connecting them to `GtkListView` with factory bindings.
+
+**Stubs are real stubs, not deleted code.** `local_store`, `keyring`, and `sync_worker` exist as modules with real function signatures and `// TODO` bodies. The app compiles against them. When Phase 2 fills them in, the interfaces won't change — just the implementations.
+
+### The build workflow
+
+```bash
+sudo dnf install meson cargo rust libadwaita-devel libsecret-devel blueprint-compiler
+cd notes/linux
+meson setup build --prefix=$HOME/.local -Dprofile=development
+meson compile -C build
+meson install -C build
+~/.local/bin/amadeuz-notes
+```
+
+The first `cargo build` inside Meson will download crates — takes a few minutes on the first run. Subsequent builds are fast (incremental Cargo).
+
+### Where things stand
+
+The skeleton should compile and open an `AdwApplicationWindow` with the split-view layout visible. No data is loaded, no network calls are made, the note list is empty. The next step is Phase 2: wiring `local_store` so the app loads from `data.json` on startup, wiring the auth flow (login/register/recover screens), and then REST sync.
+
+> 📝 *Write here: first impressions of writing GTK in Rust vs C++. The GObject subclassing boilerplate is significant — every widget is a mod-in-a-mod pattern. Is that more or less annoying than C++ virtual dispatch? What does it feel like to have the compiler catch the things that C++ GTK code left as runtime crashes?*

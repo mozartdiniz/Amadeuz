@@ -279,96 +279,97 @@ Default server: `ws://localhost:8080/ws`
 
 ---
 
-## Linux (C++ + GTK4)
+## Linux (Rust + GTK4 + Libadwaita)
 
-**Status:** Phase 2a complete — user accounts, JWT auth, REST CRUD, per-note WebSocket, unfoldered notes, move note, search, Markdown styling, inline images
+**Status:** Phase 1 skeleton scaffolded — Meson + Cargo + Blueprint wired, window opens. Next: auth + local storage.
 **Location:** `notes/linux/`
+
+> **Context for a new session:** The C++ GTK4 client was brought to full Phase 2a feature parity
+> (all features ✅ in the matrix above). That code is preserved in `legacy-code/linux/` as
+> reference for the feature set and logic. The fresh Rust client must reach the same feature parity.
+> Read VISION.md → "Linux client: fresh start" section for the full rationale and chosen stack.
+
+### Stack
+
+| Layer | Choice |
+|-------|--------|
+| Language | Rust (gtk4-rs 0.10, glib 0.20) |
+| Toolkit | GTK4 4.20 + Libadwaita 1.8 |
+| UI definition | Blueprint 0.18 (`.blp` files → compiled to `.ui` by Meson) |
+| Build system | Meson 1.8 + Cargo |
+| Config | GSettings (`com.amadeuz.Notes.gschema.xml`) |
+| Credentials | `secret-service` crate (stub — wired in Phase 2) |
+| Async | Tokio + tokio-tungstenite + reqwest (stub — wired in Phase 2) |
+| Local data | `~/.local/share/amadeuz/data.json` (same format as all other clients) |
 
 ### Build
 
 ```bash
-# Install dependencies (Ubuntu / Debian) — requires GTK 4.8+
-sudo apt install cmake build-essential libgtk-4-dev libsoup-3.0-dev libjson-glib-dev libsecret-1-dev
+# Install dependencies (Fedora)
+sudo dnf install meson cargo rust libadwaita-devel libsecret-devel blueprint-compiler
+# (gtk4-devel is already installed on Fedora 43)
 
-# Configure + build
+# Configure (dev profile = debug build, no install prefix needed for testing)
 cd notes/linux
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+meson setup build --prefix=$HOME/.local -Dprofile=development
+meson compile -C build
+meson install -C build   # copies binary + gresource to ~/.local
 
 # Run
-./build/amadeuz
+~/.local/bin/amadeuz-notes
 ```
 
-### What it does
-- Login / Register / Recover screen (shown before main UI)
-- Recovery code dialog displayed after register or recover
-- Three-column layout: folder sidebar | note list | note editor (via nested `GtkPaned`)
-- Sign Out button in header bar
-- All CRUD (folders, notes) via REST; 500 ms debounced note content changes via REST PATCH
-- Per-note WebSocket opens when a note is selected — receives live updates from other clients
-- Full sync on login/reconnect: merges server state with local by last-write-wins, pushes any offline-created or locally-newer items
-- Offline-first: local state updated immediately; REST calls fire in background; full sync on reconnect catches up
-- JWT stored in GNOME Keyring (libsecret); survives app restart without re-login
-- Create folders (dialog), rename/delete folders (right-click context menu)
-- Create notes (toolbar button), delete notes (toolbar button + right-click context menu)
-- Move note between folders (right-click → "Move to…" submenu with all folders)
-- Unfoldered notes: creating from "All Notes" view creates note with no folder
-- Folder label shown on each note row when in "All Notes" view
-- Search bar in note list panel — filters by substring match on title + content
-- Markdown styling: `#`/`##`/`###` headers (bold + scaled), `- [x]` done checkboxes (strikethrough)
-- Inline images: drag any image onto the editor to insert it; stored as `![](amadeuz://blob/<uuid>)` in Markdown; rendered inline via `GtkTextChildAnchor` + `GtkPicture`; blobs saved locally under `~/.local/share/amadeuz/blobs/`
-- Note list sorted by `updated_at` descending, showing title, preview, then folder label
-- "All Notes" virtual view shows all notes across all folders (including unfoldered)
-- Auto-reconnect every 3 seconds; green/red status dot in `GtkHeaderBar`
-- Server URL format: `http://hostname:8080` (auto-migrates old `ws://` format)
-- Settings dialog for server URL (stored in `settings.json`)
+### Source layout
 
-### Local storage
-`~/.local/share/amadeuz/data.json` (XDG_DATA_HOME)
-```json
-{ "folders": [...], "notes": [...] }
+```
+notes/linux/
+├── meson.build              ← project(), dependencies, subdir() calls
+├── meson_options.txt        ← profile=default|development
+├── Cargo.toml               ← Rust dependencies
+├── data/
+│   ├── meson.build          ← compile_blueprints, compile_resources, gschema install
+│   ├── com.amadeuz.Notes.gschema.xml   ← GSettings: server-url key
+│   ├── com.amadeuz.Notes.gresource.xml ← GResource manifest
+│   └── ui/
+│       └── window.blp       ← Blueprint: AdwNavigationSplitView main window
+└── src/
+    ├── meson.build          ← cargo custom_target with MESON_* env injection
+    ├── main.rs              ← entry: load gresource, set app name, run
+    ├── config.rs            ← MESON_* compile-time statics (APP_ID, DATADIR, …)
+    ├── app.rs               ← AmzApplication (AdwApplication subclass)
+    ├── model/
+    │   ├── mod.rs
+    │   ├── note.rs          ← AmzNote GObject (id, title, content, folder_id, timestamps)
+    │   └── folder.rs        ← AmzFolder GObject (id, name, created_at)
+    ├── ui/
+    │   ├── mod.rs
+    │   └── window.rs        ← AmzWindow (AdwApplicationWindow, CompositeTemplate)
+    └── backend/
+        ├── mod.rs
+        ├── local_store.rs   ← load/save data.json (stubs until Phase 2)
+        ├── keyring.rs       ← JWT store via Secret Service (stub)
+        └── sync_worker.rs   ← REST + WebSocket (stub)
 ```
 
-### Blob storage
-`~/.local/share/amadeuz/blobs/<uuid>` (raw file, no extension). Blobs are written on drop and read back on note load.
+### Key implementation notes
 
-### Settings storage
-`~/.local/share/amadeuz/settings.json` — JSON `{ "serverAddress": "http://..." }`
-Default server: `http://localhost:8080`
+- `src/config.rs` uses `option_env!("MESON_APP_ID")` etc. — **must build via Meson**, not plain `cargo build`
+- GResource is loaded from `$DATADIR/amadeuz-notes/com.amadeuz.Notes.gresource` at startup
+- Blueprint output (`window.ui`) is placed in `<builddir>/data/ui/` by `gnome.compile_blueprints()`
+- GSettings schema must be installed (`meson install`) before `gio::Settings::new()` works
+- For iterative dev, `meson install -C build` to `$HOME/.local` is the fastest loop
 
-### Dependencies
-| Library | Used for |
-|---------|----------|
-| `gtk4` (≥ 4.8) | Window, `GtkPaned`, `GtkListBox`, `GtkHeaderBar`, text view, Markdown tags |
-| `libsoup-3.0` | REST HTTP (`soup_session_send_and_read_async`) + per-note WebSocket |
-| `json-glib-1.0` | JSON parse/generate |
-| `libsecret-1` | JWT storage in GNOME Keyring |
+### Primary reference
 
-### Key files
-| File | Role |
-|------|------|
-| `src/main.cpp` | `GtkApplication` entry, `on_activate` signal |
-| `src/models.h` | `Folder`, `Note`, `AuthResponse`, `NoteWsMsg` structs |
-| `src/main_window.h/.cpp` | GTK4 window: auth page + 3-column main layout, all signal handlers |
-| `src/note_view_model.h/.cpp` | `NotesViewModel` — auth state, `full_sync()`, REST CRUD, per-note WS lifecycle |
-| `src/api_client.h/.cpp` | All REST calls (`SoupSession` async); `AuthCb` / `ObjCb` / `BoolCb` callbacks |
-| `src/note_sync.h/.cpp` | Per-note WebSocket (`NoteSync`) — receives init/update, sends update, auto-reconnect |
-| `src/local_store.h/.cpp` | Read/write `data.json` (folders + notes); auto-migrates old `ws://` server URL |
-| `src/keyring_store.h/.cpp` | Save/load/clear JWT in GNOME Keyring via libsecret |
+**Fragments** (`external-projects/Fragments-main/`) — mature Rust + GTK4 + Libadwaita + Meson
+app. Use it as the structural reference for Cargo/Meson wiring, GObject model patterns, and
+Blueprint usage. **iotas** (also in `external-projects/`) is Python — not a Rust reference.
 
-### Architecture notes
-- All callbacks (libsoup + GTK) fire on the GLib main thread — no explicit thread marshaling needed
-- Debounce uses `g_timeout_add(500, ...)` / `g_source_remove()` for cancel-and-restart
-- Per-note WS reconnect uses `g_timeout_add_seconds(3, ...)`; destroyed on note deselect
-- Four `suppress_*` flags on `MainWindow` prevent feedback loops when programmatically updating widgets
-- `GtkListBox` cleared and rebuilt on every folder/note change (simple + correct for this scale)
-- Right-click context menus use `GtkGestureClick` (button=3) + `GtkPopover` attached to the row
-- `GtkStack` at root level: "auth" page | "main" page (switched on login/logout)
-- `GtkStack` switches editor between "empty" ("Select a note") and "editor" pages
-- `gtk_list_box_set_header_func` adds a "Folders" section header in the folder sidebar
-- Markdown styling via `GtkTextTag` on `GtkTextBuffer`; applied per-line on keystroke, full-buffer on note load
-- Move note submenu: a second `GtkPopover` parented to same row, shown after "Move to…" is clicked
-- Server URL auto-migration: `ws://host/ws` → `http://host` on first load of old settings
+### Feature target (Phase 2a parity with legacy C++ client)
+
+All features currently ✅ for Linux in the feature matrix above. The legacy C++ source in
+`legacy-code/linux/src/` is the reference for business logic: sync algorithm, debounce,
+WebSocket reconnect, Markdown serialisation, blob handling.
 
 ---
 

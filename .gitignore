@@ -42,5 +42,13 @@ Desktop.ini
 *.swp
 *.swo
 
-# ── Rust (future linux client) ────────────────────────────────────────────────
+# ── Rust / Linux client ───────────────────────────────────────────────────────
 target/
+notes/linux/build/
+notes/linux/Cargo.lock
+
+
+# ── Others ────────────────────────────────────────────────────────────────────
+
+external-projects
+legacy-code

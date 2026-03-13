@@ -24,7 +24,7 @@ Users should not be able to tell this isn't a platform-first app.
 | iOS      | Swift + SwiftUI     |
 | Android  | Kotlin + Jetpack Compose |
 | Windows  | C# + WinUI 3        |
-| Linux    | C++ + GTK4          |
+| Linux    | Rust + GTK4 + Libadwaita |
 | Server   | Go                  |
 
 Multiple platform-specific codebases are acceptable and expected.
@@ -281,58 +281,71 @@ HTTPS/WSS, dynamic DNS or relay service, proper packaging (`.app`, `.msix`, `.de
 
 ---
 
-## Planned: Linux client modernisation (scheduled)
+## Linux client: fresh start (decided March 2026)
 
-The current Linux client uses the raw GTK4 C API. The plan is to refactor it toward the
-**modern GNOME stack** before the next phase of feature development. This is not urgent — it is
-scheduled for the next Linux work session.
+The C++ GTK4 client was brought to full Phase 2a feature parity (auth, REST, per-note WebSocket,
+search, move, Markdown, inline images). That code is preserved in `legacy-code/linux/`.
 
-### Target stack
+The decision was made to discard it and start fresh with the modern GNOME stack before any
+further feature work. The C++ codebase was always intended as a proof-of-concept to validate
+the feature set, not a long-term foundation. Now that the feature set is validated, the right
+move is to build on the stack that the GNOME ecosystem is converging on.
 
-| Layer | Current | Target |
-|-------|---------|--------|
-| Toolkit | GTK4 raw C API | GTK4 + **Libadwaita** |
-| UI definition | programmatic C | **Blueprint** `.blp` files |
-| Language | C++ | C++ (keep) or Rust + gtk4-rs (evaluate) |
-| App window | `GtkApplicationWindow` | `AdwApplicationWindow` |
+### Chosen stack
 
-### Key Libadwaita widgets to adopt
+| Layer | Choice | Rationale |
+|-------|--------|-----------|
+| Language | **Rust** | Memory safety, native `async/await` for sync, first-class gtk4-rs bindings |
+| Toolkit | **GTK4 + Libadwaita** | Required for modern GNOME look; `AdwNavigationSplitView` for adaptive layout |
+| UI definition | **Blueprint** `.blp` files | ~70% shorter than GtkBuilder XML; compiles to standard `.ui` at build time |
+| Build system | **Meson + Cargo** | GNOME standard; handles Blueprint compilation and GResource bundling |
+| Config storage | **GSettings** | Platform-native; avoids custom JSON settings file |
+| Credential store | **libsecret** (via `libsecret-rs`) | Same as C++ client; GNOME Keyring integration |
+| Async runtime | **Tokio** | `tokio-tungstenite` for WebSocket; `reqwest` for REST |
+| Local data | **Flat JSON file** (`data.json`) | Matches all other clients; sufficient for POC scale |
+
+### Key widgets
 
 | Component | Widget |
 |-----------|--------|
-| Main window | `AdwApplicationWindow` — dark mode + rounded corners automatically |
-| Notes list / folder sidebar | `AdwNavigationSplitView` — adaptive (sidebar on desktop, full-screen list on phone) |
-| Agenda / To-Do entries | `AdwActionRow` — title + subtitle + icon/switch, touch-friendly |
-| Text inputs in forms | `AdwEntryRow` — integrated label + input |
-| Header bars | `AdwHeaderBar` — replaces menu bar; everything in the header |
-| Symbolic icons | `-symbolic` variants only in toolbars — auto-recolor for dark mode |
+| Main window | `AdwApplicationWindow` |
+| Folder sidebar + note list | `AdwNavigationSplitView` (adaptive — works on phone too) |
+| Note rows | `AdwActionRow` |
+| Header | `AdwHeaderBar` |
+| Toast notifications | `AdwToast` |
+| Empty state | `AdwStatusPage` |
 
-### Why Libadwaita
+### Primary reference project
 
-- Provides the visual identity expected by GNOME 45+ users (pill buttons, soft-gray-on-dark aesthetic)
-- `AdwNavigationSplitView` gives free mobile/desktop convergence — same code runs on Phosh / postmarketOS
-- Apps that do not use Libadwaita look out of place in the GNOME shell since GNOME 42
+**Fragments** (GNOME torrent client) — Rust + GTK4 + Libadwaita + Meson. This is the
+structural reference for the Rust code organisation, GObject model patterns, and Meson build.
 
-### Blueprint (UI definition language)
+Note: `iotas` (GNOME notes app, also studied) is **Python**, not Rust. Its architecture
+patterns are not directly applicable.
 
-Stop writing XML `.ui` files. Blueprint is the community standard in 2026:
-- Declarative syntax (CSS/JSON feel), ~70% shorter than GtkBuilder XML
-- GNOME Builder has live preview
-- Compiles to standard `.ui` XML at build time — no runtime dependency
+### Scope for the initial build (Phase 2a parity)
 
-### Distribution target
+Reach functional parity with the legacy C++ client. Deferred until after parity:
+- i18n / gettext (add later without restructuring anything)
+- Flatpak manifest (add when packaging becomes relevant)
+- GNOME Shell Search Provider (post-POC feature)
 
-**Flatpak** is the only correct distribution method for a GNOME app:
-- Bundles the exact Libadwaita/GTK4 version the app was built against
-- App does not break when the user updates their OS
-- Required for GNOME Circle membership
+### Source layout
 
-### Rust consideration
-
-gtk4-rs is the fastest-growing choice in the GNOME ecosystem and the direction of new
-GNOME Circle apps (Loupe, Fractal, Snapshot). If the C++ codebase grows significantly
-before the refactor, evaluate porting the Linux client to Rust at that point.
-The non-UI layers (api_client, note_sync, local_store) map directly to Rust idioms.
+```
+notes/linux/
+├── meson.build
+├── Cargo.toml
+├── data/
+│   ├── com.amadeuz.Notes.gschema.xml   ← GSettings schema
+│   └── ui/                             ← Blueprint .blp files
+└── src/
+    ├── main.rs
+    ├── app.rs
+    ├── model/         ← GObject data models (Note, Folder)
+    ├── ui/            ← AdwWindow, sidebar, editor, widgets
+    └── backend/       ← local_store, sync_worker, keyring
+```
 
 ---
 
@@ -400,3 +413,7 @@ The non-UI layers (api_client, note_sync, local_store) map directly to Rust idio
 | E2E encryption is non-negotiable for internet-facing deployments | On a LAN the user owns the trust boundary. On a VPS the hosting provider has root access to the SQLite file. Without E2E, a user who moves off iCloud to avoid Apple reading their notes has traded one corporation for their VPS provider. E2E ensures the server stores only ciphertext regardless of where it runs. This is also the primary reason the privacy-conscious audience will trust the product with sensitive content (medical notes, private journals, passwords). |
 | `GtkDropTarget` + `GtkTextChildAnchor` + `GtkPicture` for Linux inline images | `GtkDropTarget` with `GDK_TYPE_FILE_LIST` intercepts file drops on `GtkTextView`. MIME type is checked via `g_file_query_info` before accepting. Each image is given a UUID, copied to the blobs directory, and inserted as a `GtkTextChildAnchor` with a `GtkPicture` child widget (scaled to max 400 px wide). `GtkPicture` is used over `GtkImage` because it renders the full image at the requested pixel dimensions; `GtkImage` treats non-icon paintables with no natural size and requires an explicit size request. A `blob_anchors_` map on `MainWindow` tracks anchor → UUID so `cb_content_changed` can serialize the buffer back to `![](amadeuz://blob/<uuid>)` Markdown by iterating character-by-character with `gtk_text_iter_get_child_anchor`. On note load, `render_blob_images()` does the reverse: finds all `![](amadeuz://blob/<uuid>)` patterns in reverse offset order, deletes each text span, and inserts an image anchor in its place. |
 | `NotesViewModel` constructor fires `on_auth_state_` before widgets exist (Linux) | The VM is constructed before any GTK widgets, so the initial `on_auth_state_(true)` callback (triggered when a saved token is found in the keyring) calls `show_main_page()` while `root_stack_` and all other widget pointers are still null — a silent no-op. `GtkStack` defaults to the first page added ("auth"). Fixed by explicitly calling `show_main_page()` or `show_auth_page()` after all widgets are built, replacing the one-sided `if (!is_logged_in())` fallback with a full `if/else` branch. |
+| Linux client restarted in Rust + Libadwaita (March 2026) | The C++ GTK4 client reached full Phase 2a feature parity. Rather than continue adding features to a C++ codebase that was always a proof-of-concept, the decision was made to restart with Rust + GTK4 + Libadwaita + Blueprint + Meson — the stack that GNOME Circle apps are converging on. The feature set was already validated; the restart is a code quality decision, not a product decision. Legacy C++ code preserved in `legacy-code/linux/`. |
+| Fragments (not iotas) as the primary Rust reference for Linux | Both were studied as GNOME Circle reference projects. iotas turned out to be Python (PyGObject), not Rust — its GObject patterns look different and are not directly transferable. Fragments is a mature Rust + GTK4 + Libadwaita + Meson app with clean code organisation, making it the correct structural reference. |
+| Flat JSON file for Linux local storage (not SQLite) | SQLite would be the right choice for a multi-user or large-scale app. For the POC, a single `data.json` file matches every other client and keeps the data layer simple and consistent. Can be migrated to SQLite later without changing the sync or UI layers. |
+| GSettings for config, not custom JSON (Linux) | GSettings is the platform-native config mechanism — values are manageable via `dconf-editor`, follow system-wide patterns, and don't require hand-rolling serialisation. The custom `settings.json` from the C++ client is replaced. |

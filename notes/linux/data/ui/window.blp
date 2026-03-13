@@ -1,0 +1,93 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $AmzWindow : Adw.ApplicationWindow {
+  width-request: 360;
+  height-request: 500;
+  default-width: 1200;
+  default-height: 800;
+
+  content: Adw.NavigationSplitView split_view {
+    min-sidebar-width: 280;
+
+    sidebar: Adw.NavigationPage {
+      title: _("Notes");
+
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar {
+          [end]
+          Gtk.Button new_note_button {
+            icon-name: "list-add-symbolic";
+            tooltip-text: _("New Note");
+          }
+          [end]
+          Gtk.MenuButton menu_button {
+            icon-name: "open-menu-symbolic";
+            tooltip-text: _("Main Menu");
+            primary: true;
+            menu-model: main_menu;
+          }
+        }
+
+        Gtk.ScrolledWindow {
+          vexpand: true;
+          hscrollbar-policy: never;
+
+          Gtk.ListBox note_list {
+            selection-mode: single;
+            valign: start;
+
+            styles ["navigation-sidebar"]
+          }
+        }
+      };
+    };
+
+    content: Adw.NavigationPage editor_page {
+      title: _("Editor");
+
+      child: Adw.ToolbarView editor_toolbar {
+        [top]
+        Adw.HeaderBar {
+          title-widget: Gtk.Entry title_entry {
+            placeholder-text: _("Note title…");
+            hexpand: true;
+
+            styles ["title"]
+          };
+        }
+
+        Gtk.ScrolledWindow {
+          vexpand: true;
+          hexpand: true;
+
+          Gtk.TextView text_view {
+            vexpand: true;
+            hexpand: true;
+            wrap-mode: word_char;
+            top-margin: 12;
+            bottom-margin: 12;
+            left-margin: 16;
+            right-margin: 16;
+
+            styles ["monospace"]
+          }
+        }
+      };
+    };
+  };
+}
+
+menu main_menu {
+  section {
+    item {
+      label: _("_Preferences");
+      action: "win.show-preferences";
+    }
+    item {
+      label: _("_About Amadeuz Notes");
+      action: "win.show-about";
+    }
+  }
+}
