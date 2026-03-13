@@ -2,12 +2,16 @@ blueprint_compiler = find_program('blueprint-compiler', required: true)
 
 # Compile Blueprint .blp files → .ui XML
 blueprints = custom_target('blueprints',
-  input: files('ui/window.blp'),
+  input: files(
+    'ui/window.blp',
+    'ui/auth.blp',
+    'ui/note_row.blp',
+  ),
   output: '.',
   command: [
-    blueprint_compiler, 'batch-compile', 
-    '@OUTPUT@', 
-    '@CURRENT_SOURCE_DIR@', 
+    blueprint_compiler, 'batch-compile',
+    '@OUTPUT@',
+    '@CURRENT_SOURCE_DIR@',
     '@INPUT@'
   ],
 )

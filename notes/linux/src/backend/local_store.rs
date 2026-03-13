@@ -1,11 +1,8 @@
-// Local persistence: reads/writes ~/.local/share/amadeuz/data.json
-// Same JSON format as all other Amadeuz clients.
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LocalData {
     pub folders: Vec<FolderRecord>,
     pub notes: Vec<NoteRecord>,
@@ -29,17 +26,21 @@ pub struct NoteRecord {
 }
 
 fn data_path() -> PathBuf {
-    let base = glib::user_data_dir();
-    base.join("amadeuz").join("data.json")
+    glib::user_data_dir().join("amadeuz").join("data.json")
 }
 
-pub fn load() -> Result<LocalData> {
+pub fn load() -> LocalData {
     let path = data_path();
     if !path.exists() {
-        return Ok(LocalData::default());
+        return LocalData::default();
     }
-    let bytes = std::fs::read(&path)?;
-    Ok(serde_json::from_slice(&bytes)?)
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Err(e) => {
+            log::warn!("Could not read local data: {e}");
+            LocalData::default()
+        }
+    }
 }
 
 pub fn save(data: &LocalData) -> Result<()> {

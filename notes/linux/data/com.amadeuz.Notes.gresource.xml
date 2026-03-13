@@ -2,5 +2,7 @@
 <gresources>
   <gresource prefix="/com/amadeuz/Notes">
     <file compressed="true" preprocess="xml-stripblanks">ui/window.ui</file>
+    <file compressed="true" preprocess="xml-stripblanks">ui/auth.ui</file>
+    <file compressed="true" preprocess="xml-stripblanks">ui/note_row.ui</file>
   </gresource>
 </gresources>

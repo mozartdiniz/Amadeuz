@@ -1,0 +1,34 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $AmzNoteRow : Gtk.Box {
+  orientation: vertical;
+  spacing: 3;
+  margin-top: 10;
+  margin-bottom: 10;
+  margin-start: 12;
+  margin-end: 12;
+
+  Gtk.Label title_label {
+    halign: start;
+    ellipsize: end;
+    max-width-chars: 40;
+    styles ["body"]
+  }
+
+  Gtk.Box {
+    spacing: 8;
+
+    Gtk.Label date_label {
+      halign: start;
+      styles ["caption", "dim-label"]
+    }
+
+    Gtk.Label preview_label {
+      halign: start;
+      hexpand: true;
+      ellipsize: end;
+      styles ["caption", "dim-label"]
+    }
+  }
+}

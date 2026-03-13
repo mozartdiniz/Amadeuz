@@ -54,7 +54,16 @@
       "Bash(cd /home/mozartdiniz/Dev/Amadeuz/notes/linux && meson setup build --prefix=$HOME/.local -Dprofile=development 2>&1)",
       "Bash(meson compile:*)",
       "Bash(meson install:*)",
-      "Bash(sleep 2 && scrot -u /tmp/amadeuz_screenshot.png 2>/dev/null || gnome-screenshot -w -f /tmp/amadeuz_screenshot.png 2>/dev/null || echo \"screenshot tool not available\")"
+      "Bash(sleep 2 && scrot -u /tmp/amadeuz_screenshot.png 2>/dev/null || gnome-screenshot -w -f /tmp/amadeuz_screenshot.png 2>/dev/null || echo \"screenshot tool not available\")",
+      "Bash(rm -rf build && meson setup build -Dprofile=development 2>&1 | tail -20)",
+      "Bash(ninja -C build 2>&1 | tail -30)",
+      "Bash(ninja -C build 2>&1 | tail -20)",
+      "Bash(ninja -C build 2>&1 | grep -E \"FAILED|Build targets|error\" | head -10)",
+      "Bash(ninja -C build && echo \"BUILD_SUCCESS\")",
+      "Bash(meson configure:*)",
+      "Bash(glib-compile-schemas /home/mozartdiniz/.local/share/glib-2.0/schemas/ && echo \"SCHEMAS_OK\")",
+      "Bash(blueprint-compiler batch-compile:*)",
+      "Bash(pkill amadeuz-notes:*)"
     ]
   }
 }

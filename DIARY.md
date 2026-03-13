@@ -1808,3 +1808,49 @@ The first `cargo build` inside Meson will download crates — takes a few minute
 The skeleton should compile and open an `AdwApplicationWindow` with the split-view layout visible. No data is loaded, no network calls are made, the note list is empty. The next step is Phase 2: wiring `local_store` so the app loads from `data.json` on startup, wiring the auth flow (login/register/recover screens), and then REST sync.
 
 > 📝 *Write here: first impressions of writing GTK in Rust vs C++. The GObject subclassing boilerplate is significant — every widget is a mod-in-a-mod pattern. Is that more or less annoying than C++ virtual dispatch? What does it feel like to have the compiler catch the things that C++ GTK code left as runtime crashes?*
+
+---
+
+## March 13, 2026 — Phase 2: the full Linux app compiles and runs
+
+### What was built
+
+Phase 1 left us with a skeleton: Meson wired to Cargo, Blueprint compiled, a window opening. Phase 2 filled in everything: auth views, local storage, REST API client, WebSocket sync, full 3-column layout, keyring integration, and the NotesManager event loop that ties it all together.
+
+The compile loop today was a long sequence of errors, each one teaching something about the gtk4-rs ecosystem in 2026.
+
+### The `glib::Sender` removal
+
+The first major surprise: `glib::MainContext::channel::<T>()` no longer exists in glib 0.21. The `glib::Sender` and `glib::Receiver` types that the C++ and older Rust GTK codebases relied on for tokio→GTK communication were silently removed. The replacement is `async_channel::bounded()` paired with `glib::MainContext::default().spawn_local(async move { while let Ok(event) = rx.recv().await { ... } })`. The logic is identical; the API is different.
+
+This is the kind of breaking change that only becomes visible when you actually try to compile against the current versions rather than older examples online.
+
+### Trait bounds on `glib::wrapper!`
+
+Every GObject subclass needs its `@implements` list to match what the parent type actually implements. For a plain `adw::Bin` subclass, you need `gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget`. For an `adw::ApplicationWindow` subclass, you need those three plus `gtk::Native, gtk::Root, gtk::ShortcutManager`. Missing any of these causes a flood of confusing trait bound errors that trace back to `WidgetImpl` and `WindowImpl` bounds. The fix is mechanical once you know the pattern — but tracking it down the first time takes a while.
+
+### GtkStack page names in Blueprint
+
+Blueprint 0.18 has a gotcha with `Gtk.Stack` children: if you write `Gtk.Widget { name: "auth"; }` inside a Stack, Blueprint sets `GtkWidget.name` (the CSS name), not the `GtkStackPage.name`. The page name is what `gtk_stack_set_visible_child_name()` looks up, so the two are completely different things.
+
+The fix is to use explicit `Gtk.StackPage { name: "auth"; child: SomeWidget {}; }` wrappers. Once you know this, it's one extra wrapper per page. Before you know it, you're staring at a "Child name 'auth' not found in GtkStack" runtime warning and the auth screen never appears.
+
+### `gio::Settings::with_path` and the `Result` that vanished
+
+`gio::Settings::new_with_path()` returned a `Result<Settings>` in older gio-rs. In gio 0.21 it was renamed to `with_path()` and now panics if the schema isn't installed. The idiom became: check `gio::SettingsSchemaSource::default().and_then(|src| src.lookup(...)).is_some()` before calling `with_path()`. The net behavior is the same — fail gracefully if the schema hasn't been installed yet — but the API changed under us.
+
+### WebSocket callbacks need `Sync`
+
+`NoteSync::connect` takes closures that are called from inside `tokio::spawn`. That requires `Send`. But the closures are also referenced via `&impl Fn(...)` inside an async block, which requires `Sync` too (you can't share `&T` across threads unless `T: Sync`). The fix is adding `+ Sync` to the bounds. Rust's error message for this is actually good — it suggests the `Sync` addition directly.
+
+### The async send pattern
+
+`async_channel::Sender` is an async sender: `.send(event).await.ok()` in async blocks, `.try_send(event).ok()` in sync closures. The original code used the sync form everywhere and the compiler rejected it in async blocks. Systematic: all `crate::spawn(async move { tx.send(...) })` blocks needed `.await`, and all sync closures passed to `NoteSync::connect` needed `try_send`.
+
+### Where things stand
+
+The app compiles clean (0 errors, 3 harmless dead-code warnings). `ninja -C build && meson install -C build` succeeds. The binary starts, loads the GResource, reads GSettings, checks the keyring for a saved JWT, and presents either the auth screen or the main 3-column layout depending on whether a token is found.
+
+> 📝 *Write here: what it felt like to hit 80 compile errors and watch them reduce to 32, then 6, then 1, then 0. The Rust compiler as a guide rather than an obstacle. Any particular error message that was genuinely helpful? Any that were misleading?*
+
+> 📝 *Write here: the experience of building a GTK4 app in Rust in 2026 compared to the C++ version. Same crate versions, same Blueprint file structure — but the Rust borrow checker catches the "win lives too long" lifetime bug that would have been a subtle crash in C++.*

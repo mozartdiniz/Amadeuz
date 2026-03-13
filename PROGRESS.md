@@ -281,25 +281,25 @@ Default server: `ws://localhost:8080/ws`
 
 ## Linux (Rust + GTK4 + Libadwaita)
 
-**Status:** Phase 1 skeleton scaffolded — Meson + Cargo + Blueprint wired, window opens. Next: auth + local storage.
+**Status:** Phase 2 complete — compiles, installs, and runs. Auth UI, local storage, REST sync, WebSocket, full 3-column layout all wired.
 **Location:** `notes/linux/`
 
 > **Context for a new session:** The C++ GTK4 client was brought to full Phase 2a feature parity
 > (all features ✅ in the matrix above). That code is preserved in `legacy-code/linux/` as
-> reference for the feature set and logic. The fresh Rust client must reach the same feature parity.
-> Read VISION.md → "Linux client: fresh start" section for the full rationale and chosen stack.
+> reference for the feature set and logic. The fresh Rust client is now at Phase 2 parity.
 
 ### Stack
 
 | Layer | Choice |
 |-------|--------|
-| Language | Rust (gtk4-rs 0.10, glib 0.20) |
+| Language | Rust (gtk4-rs 0.10, glib 0.21) |
 | Toolkit | GTK4 4.20 + Libadwaita 1.8 |
 | UI definition | Blueprint 0.18 (`.blp` files → compiled to `.ui` by Meson) |
 | Build system | Meson 1.8 + Cargo |
 | Config | GSettings (`com.amadeuz.Notes.gschema.xml`) |
-| Credentials | `secret-service` crate (stub — wired in Phase 2) |
-| Async | Tokio + tokio-tungstenite + reqwest (stub — wired in Phase 2) |
+| Credentials | `secret-service` crate v3 (D-Bus Secret Service / GNOME Keyring) |
+| Async | Tokio (multi-thread) + tokio-tungstenite 0.26 + reqwest 0.12 |
+| Channel | `async_channel` 2 (tokio → GTK main thread; glib::Sender removed in glib 0.21) |
 | Local data | `~/.local/share/amadeuz/data.json` (same format as all other clients) |
 
 ### Build
@@ -309,14 +309,14 @@ Default server: `ws://localhost:8080/ws`
 sudo dnf install meson cargo rust libadwaita-devel libsecret-devel blueprint-compiler
 # (gtk4-devel is already installed on Fedora 43)
 
-# Configure (dev profile = debug build, no install prefix needed for testing)
 cd notes/linux
 meson setup build --prefix=$HOME/.local -Dprofile=development
-meson compile -C build
-meson install -C build   # copies binary + gresource to ~/.local
+ninja -C build
+meson install -C build
+glib-compile-schemas ~/.local/share/glib-2.0/schemas/
 
 # Run
-~/.local/bin/amadeuz-notes
+GSETTINGS_SCHEMA_DIR=~/.local/share/glib-2.0/schemas ~/.local/bin/amadeuz-notes
 ```
 
 ### Source layout
@@ -327,49 +327,49 @@ notes/linux/
 ├── meson_options.txt        ← profile=default|development
 ├── Cargo.toml               ← Rust dependencies
 ├── data/
-│   ├── meson.build          ← compile_blueprints, compile_resources, gschema install
+│   ├── meson.build          ← Blueprint batch-compile, compile_resources, gschema install
 │   ├── com.amadeuz.Notes.gschema.xml   ← GSettings: server-url key
-│   ├── com.amadeuz.Notes.gresource.xml ← GResource manifest
+│   ├── com.amadeuz.Notes.gresource.xml ← GResource manifest (window.ui, auth.ui, note_row.ui)
 │   └── ui/
-│       └── window.blp       ← Blueprint: AdwNavigationSplitView main window
+│       ├── window.blp       ← Blueprint: 3-column layout (folders | note list | editor)
+│       ├── auth.blp         ← Blueprint: login / register / recover UI
+│       └── note_row.blp     ← Blueprint: note list row (title + date + preview)
 └── src/
     ├── meson.build          ← cargo custom_target with MESON_* env injection
-    ├── main.rs              ← entry: load gresource, set app name, run
+    ├── main.rs              ← entry: tokio runtime, load gresource, run GTK
     ├── config.rs            ← MESON_* compile-time statics (APP_ID, DATADIR, …)
-    ├── app.rs               ← AmzApplication (AdwApplication subclass)
+    ├── app.rs               ← AmzApplication: reads GSettings, loads keyring, creates manager
+    ├── manager.rs           ← NotesManager: event loop, auth, CRUD, debounce, WS lifecycle
     ├── model/
     │   ├── mod.rs
     │   ├── note.rs          ← AmzNote GObject (id, title, content, folder_id, timestamps)
     │   └── folder.rs        ← AmzFolder GObject (id, name, created_at)
     ├── ui/
     │   ├── mod.rs
+    │   ├── auth.rs          ← AmzAuthView (AdwBin, CompositeTemplate)
+    │   ├── note_row.rs      ← AmzNoteRow (GtkBox, CompositeTemplate)
     │   └── window.rs        ← AmzWindow (AdwApplicationWindow, CompositeTemplate)
     └── backend/
         ├── mod.rs
-        ├── local_store.rs   ← load/save data.json (stubs until Phase 2)
-        ├── keyring.rs       ← JWT store via Secret Service (stub)
-        └── sync_worker.rs   ← REST + WebSocket (stub)
+        ├── api_client.rs    ← REST API client (reqwest, all endpoints)
+        ├── local_store.rs   ← load/save data.json via glib::user_data_dir()
+        ├── keyring.rs       ← JWT store/load/delete via secret-service crate
+        └── sync_worker.rs   ← NoteSync RAII handle: WS per note, auto-reconnect, cancel via oneshot
 ```
 
 ### Key implementation notes
 
-- `src/config.rs` uses `option_env!("MESON_APP_ID")` etc. — **must build via Meson**, not plain `cargo build`
-- GResource is loaded from `$DATADIR/amadeuz-notes/com.amadeuz.Notes.gresource` at startup
-- Blueprint output (`window.ui`) is placed in `<builddir>/data/ui/` by `gnome.compile_blueprints()`
-- GSettings schema must be installed (`meson install`) before `gio::Settings::new()` works
-- For iterative dev, `meson install -C build` to `$HOME/.local` is the fastest loop
+- **glib 0.21**: `glib::Sender/Receiver` removed. Use `async_channel::bounded()` + `glib::MainContext::default().spawn_local()` to receive events on the GTK main thread.
+- **Tokio handle**: `TOKIO_HANDLE: OnceLock<tokio::runtime::Handle>` in `main.rs`; accessed globally via `crate::spawn()`.
+- **Blueprint StackPage names**: Must use explicit `Gtk.StackPage { name: "auth"; child: ... }` — setting `name:` on the widget itself only sets `GtkWidget.name` (CSS), not the page name.
+- **`glib::wrapper!` @implements**: ApplicationWindow subclasses need the full set: `gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Native, gtk::Root, gtk::ShortcutManager` plus `gio::ActionGroup, gio::ActionMap`.
+- **`gio::Settings::with_path`**: In gio 0.21, `new_with_path` was renamed to `with_path` (no longer returns a Result — panics if schema not found). Guard with `gio::SettingsSchemaSource::default().and_then(|src| src.lookup(...))`.
+- **WS callbacks must be `Sync`**: `NoteSync::connect` closures (`on_msg`, `on_status`) are called from inside `tokio::spawn`, which requires `Send + Sync`.
+- Must build via Meson — `cargo build` alone won't inject MESON_* env vars into `config.rs`.
 
 ### Primary reference
 
-**Fragments** (`external-projects/Fragments-main/`) — mature Rust + GTK4 + Libadwaita + Meson
-app. Use it as the structural reference for Cargo/Meson wiring, GObject model patterns, and
-Blueprint usage. **iotas** (also in `external-projects/`) is Python — not a Rust reference.
-
-### Feature target (Phase 2a parity with legacy C++ client)
-
-All features currently ✅ for Linux in the feature matrix above. The legacy C++ source in
-`legacy-code/linux/src/` is the reference for business logic: sync algorithm, debounce,
-WebSocket reconnect, Markdown serialisation, blob handling.
+**Fragments** (`external-projects/Fragments-main/`) — mature Rust + GTK4 + Libadwaita + Meson app.
 
 ---
 
