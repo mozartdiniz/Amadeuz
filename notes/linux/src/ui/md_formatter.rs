@@ -14,6 +14,9 @@ const TAG_CODE: &str = "md-code";
 const TAG_STRIKE: &str = "md-strike";
 const TAG_BLOCKQUOTE: &str = "md-blockquote";
 const TAG_LINK: &str = "md-link";
+// Gray syntax-character tag — applied to delimiters like `**`, `*`, `#`, `~~`, backticks.
+// Added before the checkbox tags so TAG_CHECKBOX_X (red) still wins at the `x` position.
+const TAG_SYNTAX: &str = "md-syntax";
 // Checkbox-specific tags (added last → highest priority, so TAG_CHECKBOX_X
 // overrides the gray from TAG_CHECKBOX_MARKER at the `x` position).
 const TAG_CHECKBOX_MARKER: &str = "md-checkbox-marker";
@@ -23,6 +26,7 @@ const TAG_CHECKBOX_DONE: &str = "md-checkbox-done";
 const ALL_TAGS: &[&str] = &[
     TAG_TITLE, TAG_H1, TAG_H2, TAG_H3, TAG_BOLD, TAG_ITALIC,
     TAG_CODE, TAG_STRIKE, TAG_BLOCKQUOTE, TAG_LINK,
+    TAG_SYNTAX,
     TAG_CHECKBOX_MARKER, TAG_CHECKBOX_X, TAG_CHECKBOX_DONE,
 ];
 
@@ -100,6 +104,9 @@ pub fn setup_tags(buffer: &gtk::TextBuffer) {
         t.set_property("underline", pango::Underline::Single);
         t.set_property("foreground", "#0078d4");
     });
+    add(TAG_SYNTAX, &|t| {
+        t.set_property("foreground", "#888888");
+    });
     // Checkbox tags — added after all others so they win priority conflicts.
     add(TAG_CHECKBOX_MARKER, &|t| {
         t.set_property("foreground", "#888888");
@@ -159,7 +166,84 @@ pub fn apply_formatting(buffer: &gtk::TextBuffer) {
     let base_char = text[..content_byte_start].chars().count() as i32;
 
     apply_md_tags(buffer, content, base_char);
+    apply_syntax_dimming(buffer, content, base_char);
     apply_checkbox_styling(buffer, content, base_char);
+}
+
+/// Dim all markdown syntax/delimiter characters to gray (#888888).
+///
+/// For inline elements (bold, italic, strikethrough) the Start and End event
+/// ranges from pulldown-cmark's OffsetIter are exactly the delimiter spans
+/// (e.g., `**`, `*`, `~~`), so we apply TAG_SYNTAX directly to those ranges.
+///
+/// Inline code backtick fences are detected by counting leading backticks in
+/// the Event::Code range.
+///
+/// Heading `#` prefixes and blockquote `>` prefixes are found by a line scan.
+fn apply_syntax_dimming(buffer: &gtk::TextBuffer, text: &str, base: i32) {
+    // ── Inline delimiters via pulldown-cmark ─────────────────────────────
+    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
+    let parser = Parser::new_ext(text, options).into_offset_iter();
+
+    for (event, range) in parser {
+        match event {
+            // Opening delimiter: Start event range = the delimiter span
+            Event::Start(Tag::Strong)
+            | Event::Start(Tag::Emphasis)
+            | Event::Start(Tag::Strikethrough) => {
+                apply_range(buffer, text, base, TAG_SYNTAX, range.start, range.end);
+            }
+            // Closing delimiter: End event range = the delimiter span
+            Event::End(TagEnd::Strong)
+            | Event::End(TagEnd::Emphasis)
+            | Event::End(TagEnd::Strikethrough) => {
+                apply_range(buffer, text, base, TAG_SYNTAX, range.start, range.end);
+            }
+            // Inline code: count the opening backtick fence, apply to both ends
+            Event::Code(_) if range.end > range.start => {
+                let snippet = &text[range.start..range.end];
+                let tick_len = snippet.bytes().take_while(|&b| b == b'`').count();
+                // Only dim if there's actual content between the fences
+                if tick_len > 0 && range.end - range.start > 2 * tick_len {
+                    apply_range(buffer, text, base, TAG_SYNTAX, range.start, range.start + tick_len);
+                    apply_range(buffer, text, base, TAG_SYNTAX, range.end - tick_len, range.end);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // ── Block prefixes via line scan ─────────────────────────────────────
+    let mut byte_pos = 0usize;
+    for line in text.split('\n') {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = &line[indent..];
+
+        // Heading: `#{1,6} ` or `#{1,6}` at end of line
+        if trimmed.starts_with('#') {
+            let hash_count = trimmed.bytes().take_while(|&b| b == b'#').count();
+            if hash_count <= 6 {
+                let after = &trimmed[hash_count..];
+                if after.is_empty() || after.starts_with(' ') {
+                    let prefix_end = byte_pos + indent + hash_count
+                        + if after.starts_with(' ') { 1 } else { 0 };
+                    apply_range(buffer, text, base, TAG_SYNTAX, byte_pos + indent, prefix_end);
+                }
+            }
+        }
+
+        // Blockquote: `> ` or lone `>`
+        if trimmed.starts_with("> ") || trimmed == ">" {
+            let prefix_len = if trimmed.starts_with("> ") { 2 } else { 1 };
+            apply_range(
+                buffer, text, base, TAG_SYNTAX,
+                byte_pos + indent,
+                byte_pos + indent + prefix_len,
+            );
+        }
+
+        byte_pos += line.len() + 1;
+    }
 }
 
 /// Apply gray/red/strikethrough styling to `- [ ]` and `- [x]` checkbox lines.
