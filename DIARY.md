@@ -1892,3 +1892,69 @@ All three features compile and run. Typing `**word**` makes the whole span bold.
 > 📝 *Write here: your reaction to typing a heading for the first time and seeing the font actually get bigger. Does live-preview feel different from the old plain-text editor? Is there anything that felt janky or not quite right?*
 
 > 📝 *Write here: the experience of building a GTK4 app in Rust in 2026 compared to the C++ version. Same crate versions, same Blueprint file structure — but the Rust borrow checker catches the "win lives too long" lifetime bug that would have been a subtle crash in C++.*
+
+---
+
+## March 13, 2026 — Auth flow, offline mode, trash, and UX polish on Linux
+
+### Starting point
+
+The previous session left us with live markdown formatting and inline images working. The app could authenticate against the server, but the auth screen had a `Gtk.StackSwitcher` for navigating between Login, Register, and Recover — tabs that nobody found. This session focused on: making the auth flow discoverable, adding an offline mode, implementing the trash, and fixing image paste for screenshots.
+
+### The StackSwitcher problem
+
+The recover password flow was invisible. Users land on the Login page, see email and password fields, and a "Sign In" button. The tabs at the top say "Login", "Register", "Recover". In practice, nobody clicks the Recover tab — it's not where you look when you've forgotten your password. You look below the button.
+
+The fix: remove the `Gtk.StackSwitcher` entirely. Add inline contextual links beneath each action button — "Create account" and "Forgot your password?" on the login page; "Already have an account? Sign in" on the register page; "Back to sign in" on the recover page. These are `flat`-styled `Gtk.Button`s that switch the `Gtk.Stack` page.
+
+The wiring lives in `AmzAuthView::ObjectImpl::constructed()` — the view's own `constructed()` override handles its internal navigation, so the window doesn't need to know about it.
+
+### The `Gtk.StackPage` name trap
+
+This produced a subtle bug. The `auth_stack` used `Gtk.Box { name: "register"; }` as page children. In Blueprint, `name:` on a widget sets `GtkWidget.name` — the CSS name — not the `GtkStackPage` name that `set_visible_child_name()` looks up. The result was a "Child name 'register' not found in GtkStack" runtime warning and a no-op navigation.
+
+The fix is `Gtk.StackPage { name: "register"; child: Gtk.Box { … }; }`. One wrapper per page. This is documented now in PROGRESS.md and VISION.md so future sessions don't have to rediscover it.
+
+### The disabled button problem
+
+A second auth bug: if the user tried to login with wrong credentials, the login handler called `set_sensitive_all(false)` (disabling all auth buttons while the request was in-flight). The request failed, `on_auth_error` fired, `set_sensitive_all(true)` re-enabled them. So far so good. But if the user clicked "Forgot your password?" *while the request was still in-flight*, they landed on the recover page with the button already greyed out, and it never re-enabled from their perspective.
+
+The fix: connect to `auth_stack.connect_visible_child_notify`. Every time the page changes, re-enable all buttons and clear the error label. A request on one page cannot bleed into another page's state.
+
+### The trash and the FK violation
+
+Adding a trash/wastebasket feature seemed straightforward: move a trashed note to `folder_id = "__wastebasket__"`. The server immediately rejected this with a foreign key violation — `folder_id` is a real FK constraint to the `folders` table, and `__wastebasket__` doesn't exist there.
+
+Option A: create a real "Wastebasket" folder in the DB. Rejected — it would appear in every user's folder list and require special-casing everywhere.
+
+Option B: add a `deleted_at INTEGER` column to `notes`. Chosen. `PATCH /notes/:id/trash` sets `deleted_at = now()`; `PATCH /notes/:id/restore` sets it to NULL. `GET /notes` returns everything including soft-deleted notes, and clients use `deleted_at` to determine which notes belong in the trash.
+
+The client maps this at the boundary: when loading from disk or applying a sync, any note with a non-null `deleted_at` gets `folder_id = "__wastebasket__"` as a local sentinel. The rest of the UI works against the sentinel — context menus check for it, the filter model uses it, the note row shows the folder name from it.
+
+The DB migration uses `pragma_table_info` to check whether `deleted_at` already exists before running `ALTER TABLE`. Safe to re-run without versioning the schema.
+
+### The welcome screen
+
+Before this session, a user with no saved token landed on the auth screen. That's wrong for an offline-first app — you shouldn't need a server to use it.
+
+The new first screen is a `Adw.StatusPage` with the app icon and two `Adw.ActionRow`s (GNOME HIG pattern for a choice between modes):
+- **Use Offline** — notes saved locally, no account, no server. Sets `offline_mode = true` in `data.json` and immediately loads the note list.
+- **Connect to Server** — navigates to the auth stack.
+
+`offline_mode` is persisted to disk, so subsequent launches skip the welcome screen. The menu button respects the mode: offline users see "Return to Start" (no destructive confirmation — no data is lost by returning); authenticated users see "Sign Out" (destructive, clears local data).
+
+The "Connect to Server" button on the welcome screen always resets the auth stack to the login page before navigating there, so you never land on the recover page by accident.
+
+### Clipboard image paste
+
+The existing image paste handler only handled `gdk::FileList` — files dragged or copied from a file manager. Screenshots via PrintScreen and images copied from web browsers place a `GdkTexture` on the clipboard, not a file list. The handler returned `false` for those, letting GTK's default paste handler run, which did nothing useful in a `GtkTextView`.
+
+Added a second branch: if `clipboard.formats().contains_type(gdk::Texture::static_type())`, call `clipboard.read_texture_async()`. The callback receives `Result<Option<Texture>, Error>` — the `Option` is `None` when the clipboard had no image content (not an error). On success, save as PNG to `~/.local/share/amadeuz/images/{note_id}/` and insert the markdown reference.
+
+### Where things stand
+
+The Linux client and server are at feature parity for this milestone. The app handles the full user lifecycle: first-launch choice (offline vs. online), account creation with recovery codes, password recovery, note and folder management, live sync across devices, trash with soft delete, inline images via drag-and-drop or clipboard paste, and live markdown formatting. Everything compiles clean. `just dev` builds and runs in one command.
+
+> 📝 *Write here: what it felt like to finally get the auth navigation working after the StackPage name bug. Was the fix satisfying or frustrating — a simple one-line change that required understanding an obscure GTK/Blueprint distinction?*
+
+> 📝 *Write here: the offline mode decision — building software that doesn't require a server to be useful is a design principle, not just a feature. Did adding it feel like an afterthought or something that should have been there from day one?*

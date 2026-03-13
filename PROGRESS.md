@@ -52,6 +52,10 @@
 | REST CRUD API | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 | Per-note WebSocket (live sync) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 | Sign Out | — | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Trash (soft delete / restore / delete permanently) | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Offline mode (no account, persisted choice) | — | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Welcome / onboarding screen | — | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Image paste from clipboard (screenshots, web) | — | ❌ | ❌ | ✅ | ❌ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
@@ -59,7 +63,7 @@
 
 ## Server (Go)
 
-**Status:** Phase 2a complete — user accounts, JWT auth, REST API, SQLite persistence, per-note WebSocket.
+**Status:** Phase 2a complete + trash — user accounts, JWT auth, REST API, SQLite persistence, per-note WebSocket, soft-delete (trash/restore).
 **Location:** `server/`
 **Run:** `cd server && go mod tidy && go run .`
 **Port:** `8080` on all interfaces (`0.0.0.0`)
@@ -71,11 +75,13 @@
 - Admin CLI: `amadeuz-server reset-password <email> <new-password>`
 - JWT authentication (HS256, 30-day expiry); JWT secret auto-generated and persisted in DB
 - Full folder and note CRUD via REST
+- Soft-delete (trash): `PATCH /notes/:id/trash` sets `deleted_at`; `PATCH /notes/:id/restore` clears it. `GET /notes` always returns all notes including soft-deleted; clients filter by `deleted_at`.
 - Per-note WebSocket for live typing sync (`GET /notes/:id/ws?token=<jwt>`)
 - Blob store: `PUT /blobs/:id` (authenticated, idempotent), `GET /blobs/:id` (unauthenticated)
 - SQLite via `modernc.org/sqlite` (pure Go, no CGO — cross-compiles to ARM for Raspberry Pi)
 - `PRAGMA foreign_keys = ON` + `PRAGMA journal_mode = WAL`
 - `ON DELETE CASCADE` for notes when their folder is deleted
+- Idempotent `ALTER TABLE` migration via `pragma_table_info` — safe to re-run on existing databases
 
 ### REST API
 
@@ -89,10 +95,12 @@ POST   /folders               body: { id?, name, created_at? }              → 
 PATCH  /folders/:id           body: { name }                                → { folder }
 DELETE /folders/:id                                                         → 204
 
-GET    /notes                 → { notes: [...] }  (includes content)
+GET    /notes                 → { notes: [...] }  (includes content; deleted_at non-null = in trash)
 POST   /notes                 body: { id?, folder_id?, title, content, updated_at, created_at? } → { note }
 PATCH  /notes/:id             body: { title, content, updated_at }          → { note } or 409 if stale
 PATCH  /notes/:id/move        body: { folder_id }                           → { note }
+PATCH  /notes/:id/trash                                                     → 204 (sets deleted_at = now)
+PATCH  /notes/:id/restore                                                   → 204 (clears deleted_at)
 DELETE /notes/:id                                                           → 204
 
 PUT    /blobs/:id             (authenticated)  → 201 created / 200 already exists
@@ -281,7 +289,7 @@ Default server: `ws://localhost:8080/ws`
 
 ## Linux (Rust + GTK4 + Libadwaita)
 
-**Status:** Phase 2 complete — compiles, installs, and runs. Auth UI, local storage, REST sync, WebSocket, full 3-column layout all wired.
+**Status:** Phase 2 complete + UX polish — auth, offline mode, trash, inline images (file + clipboard), welcome screen, inline folder creation, 3-line note rows, live markdown.
 **Location:** `notes/linux/`
 
 > **Context for a new session:** The C++ GTK4 client was brought to full Phase 2a feature parity
@@ -359,14 +367,28 @@ notes/linux/
         └── sync_worker.rs   ← NoteSync RAII handle: WS per note, auto-reconnect, cancel via oneshot
 ```
 
+### What it does
+
+- **Welcome / onboarding screen**: `Adw.StatusPage` with two `Adw.ActionRow`s (Use Offline / Connect to Server) and a Quit button. Shown on first launch when no token or offline-mode flag is found.
+- **Offline mode**: User chooses "Use Offline" on the welcome screen. `offline_mode = true` is persisted in `data.json`. The app works fully — create/edit/delete notes and folders — with no server. The status bar shows "Offline Mode". Menu shows "Return to Start" instead of "Sign Out".
+- **Auth flow**: Login, Register, and Recover pages in a `Gtk.Stack`. Navigation between pages uses inline links (`flat` buttons) rather than a tab bar — discoverable without taking up vertical space. Navigating between auth pages re-enables all buttons (an in-flight request on one page cannot leave another page's button greyed out). JWT stored in GNOME Keyring via `libsecret`.
+- **Trash / wastebasket**: Notes can be moved to trash (soft delete). Trash is shown as a pinned row at the bottom of the folder sidebar. In the trash, context menu shows "Restore" and "Delete Permanently". Permanent delete shows a destructive `Adw.AlertDialog` confirmation. Synced with server via `PATCH /notes/:id/trash` and `PATCH /notes/:id/restore`. Client maps `deleted_at` non-null ↔ `folder_id = "__wastebasket__"` sentinel.
+- **Inline folder creation**: Clicking `+` in the folder header reveals a `Gtk.Revealer` with a `Gtk.Entry` inline. Enter confirms, Escape cancels. No modal dialog.
+- **3-line note rows**: Title / content preview / [folder name (left) · relative date (right)]. `trim_start()` on preview strips blank lines between title and first content line.
+- **Image paste from clipboard**: `gdk::Texture` branch in the paste handler saves screenshots and web-copied images as PNGs to `~/.local/share/amadeuz/images/{note_id}/`. Previously only `gdk::FileList` (drag from file manager) was handled.
+- **Dynamic menu**: `gio::Menu` is rebuilt in `refresh_ui`. Authenticated state shows "Server Settings" + "Sign Out"; offline state shows only "Return to Start".
+- **Auto-select first note** on app start and after creating a new note (via `glib::idle_add_local_once` deferred row selection).
+
 ### Key implementation notes
 
 - **glib 0.21**: `glib::Sender/Receiver` removed. Use `async_channel::bounded()` + `glib::MainContext::default().spawn_local()` to receive events on the GTK main thread.
 - **Tokio handle**: `TOKIO_HANDLE: OnceLock<tokio::runtime::Handle>` in `main.rs`; accessed globally via `crate::spawn()`.
-- **Blueprint StackPage names**: Must use explicit `Gtk.StackPage { name: "auth"; child: ... }` — setting `name:` on the widget itself only sets `GtkWidget.name` (CSS), not the page name.
+- **Blueprint StackPage names**: Must use explicit `Gtk.StackPage { name: "auth"; child: ... }` — setting `name:` on the widget itself only sets `GtkWidget.name` (CSS), not the page name. This is the source of "Child name 'X' not found in GtkStack" runtime warnings.
 - **`glib::wrapper!` @implements**: ApplicationWindow subclasses need the full set: `gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Native, gtk::Root, gtk::ShortcutManager` plus `gio::ActionGroup, gio::ActionMap`.
 - **`gio::Settings::with_path`**: In gio 0.21, `new_with_path` was renamed to `with_path` (no longer returns a Result — panics if schema not found). Guard with `gio::SettingsSchemaSource::default().and_then(|src| src.lookup(...))`.
 - **WS callbacks must be `Sync`**: `NoteSync::connect` closures (`on_msg`, `on_status`) are called from inside `tokio::spawn`, which requires `Send + Sync`.
+- **`ObjectImpl::constructed()` for internal widget wiring**: Use this override (not `instance_init`) to wire signals between template children — template children are bound by the time `constructed()` runs.
+- **`gdk::Clipboard::read_texture_async`** returns `Result<Option<Texture>, glib::Error>` — the `Option` is `None` if the clipboard had no image data, not an error.
 - Must build via Meson — `cargo build` alone won't inject MESON_* env vars into `config.rs`.
 
 ### Primary reference
