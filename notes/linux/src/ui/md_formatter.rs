@@ -14,10 +14,16 @@ const TAG_CODE: &str = "md-code";
 const TAG_STRIKE: &str = "md-strike";
 const TAG_BLOCKQUOTE: &str = "md-blockquote";
 const TAG_LINK: &str = "md-link";
+// Checkbox-specific tags (added last → highest priority, so TAG_CHECKBOX_X
+// overrides the gray from TAG_CHECKBOX_MARKER at the `x` position).
+const TAG_CHECKBOX_MARKER: &str = "md-checkbox-marker";
+const TAG_CHECKBOX_X: &str = "md-checkbox-x";
+const TAG_CHECKBOX_DONE: &str = "md-checkbox-done";
 
 const ALL_TAGS: &[&str] = &[
     TAG_TITLE, TAG_H1, TAG_H2, TAG_H3, TAG_BOLD, TAG_ITALIC,
     TAG_CODE, TAG_STRIKE, TAG_BLOCKQUOTE, TAG_LINK,
+    TAG_CHECKBOX_MARKER, TAG_CHECKBOX_X, TAG_CHECKBOX_DONE,
 ];
 
 // ── Bullet list markers: (marker_text, continuation_text) ────────────────────
@@ -94,6 +100,17 @@ pub fn setup_tags(buffer: &gtk::TextBuffer) {
         t.set_property("underline", pango::Underline::Single);
         t.set_property("foreground", "#0078d4");
     });
+    // Checkbox tags — added after all others so they win priority conflicts.
+    add(TAG_CHECKBOX_MARKER, &|t| {
+        t.set_property("foreground", "#888888");
+    });
+    add(TAG_CHECKBOX_X, &|t| {
+        t.set_property("foreground", "#cc3333");
+        t.set_property("weight", 700i32);
+    });
+    add(TAG_CHECKBOX_DONE, &|t| {
+        t.set_property("strikethrough", true);
+    });
 }
 
 // ── Formatting application ────────────────────────────────────────────────────
@@ -142,6 +159,58 @@ pub fn apply_formatting(buffer: &gtk::TextBuffer) {
     let base_char = text[..content_byte_start].chars().count() as i32;
 
     apply_md_tags(buffer, content, base_char);
+    apply_checkbox_styling(buffer, content, base_char);
+}
+
+/// Apply gray/red/strikethrough styling to `- [ ]` and `- [x]` checkbox lines.
+///
+/// - The full marker (`- [ ] ` or `- [x] `) is gray.
+/// - For checked items, the `x` is overridden to red + bold.
+/// - For checked items, the text after the marker gets strikethrough.
+fn apply_checkbox_styling(buffer: &gtk::TextBuffer, text: &str, base: i32) {
+    let mut byte_pos = 0usize;
+
+    for line in text.split('\n') {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = &line[indent..];
+        let marker_start = byte_pos + indent;
+
+        let is_checked;
+        if trimmed.starts_with("- [ ] ")
+            || trimmed.starts_with("+ [ ] ")
+            || trimmed.starts_with("* [ ] ")
+        {
+            is_checked = false;
+        } else if trimmed.starts_with("- [x] ")
+            || trimmed.starts_with("+ [x] ")
+            || trimmed.starts_with("* [x] ")
+            || trimmed.starts_with("- [X] ")
+            || trimmed.starts_with("+ [X] ")
+            || trimmed.starts_with("* [X] ")
+        {
+            is_checked = true;
+        } else {
+            byte_pos += line.len() + 1;
+            continue;
+        }
+
+        // Gray the whole 6-char marker: `- [ ] ` or `- [x] `
+        apply_range(buffer, text, base, TAG_CHECKBOX_MARKER, marker_start, marker_start + 6);
+
+        if is_checked {
+            // Red + bold for the single `x` at offset 3 inside the marker
+            apply_range(buffer, text, base, TAG_CHECKBOX_X, marker_start + 3, marker_start + 4);
+
+            // Strikethrough for the text that follows the marker
+            let text_start = marker_start + 6;
+            let text_end = byte_pos + line.len();
+            if text_end > text_start {
+                apply_range(buffer, text, base, TAG_CHECKBOX_DONE, text_start, text_end);
+            }
+        }
+
+        byte_pos += line.len() + 1;
+    }
 }
 
 fn apply_md_tags(buffer: &gtk::TextBuffer, text: &str, base: i32) {
