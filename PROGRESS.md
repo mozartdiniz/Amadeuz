@@ -1,11 +1,11 @@
 # Amadeuz — Progress Tracker
 
 > **How to use this file in a new AI session**
->
+  >
 > Open this file at the start of the session and say:
 > "Read PROGRESS.md and VISION.md. I'm working on [platform]. Feature X is done on [other platform]
 > — implement the same thing here."
->
+  >
 > The feature matrix shows what is implemented where. Each platform section has the full
 > technical context (dependencies, build steps, file structure) needed to continue work.
 

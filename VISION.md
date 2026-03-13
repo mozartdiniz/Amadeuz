@@ -281,6 +281,61 @@ HTTPS/WSS, dynamic DNS or relay service, proper packaging (`.app`, `.msix`, `.de
 
 ---
 
+## Planned: Linux client modernisation (scheduled)
+
+The current Linux client uses the raw GTK4 C API. The plan is to refactor it toward the
+**modern GNOME stack** before the next phase of feature development. This is not urgent — it is
+scheduled for the next Linux work session.
+
+### Target stack
+
+| Layer | Current | Target |
+|-------|---------|--------|
+| Toolkit | GTK4 raw C API | GTK4 + **Libadwaita** |
+| UI definition | programmatic C | **Blueprint** `.blp` files |
+| Language | C++ | C++ (keep) or Rust + gtk4-rs (evaluate) |
+| App window | `GtkApplicationWindow` | `AdwApplicationWindow` |
+
+### Key Libadwaita widgets to adopt
+
+| Component | Widget |
+|-----------|--------|
+| Main window | `AdwApplicationWindow` — dark mode + rounded corners automatically |
+| Notes list / folder sidebar | `AdwNavigationSplitView` — adaptive (sidebar on desktop, full-screen list on phone) |
+| Agenda / To-Do entries | `AdwActionRow` — title + subtitle + icon/switch, touch-friendly |
+| Text inputs in forms | `AdwEntryRow` — integrated label + input |
+| Header bars | `AdwHeaderBar` — replaces menu bar; everything in the header |
+| Symbolic icons | `-symbolic` variants only in toolbars — auto-recolor for dark mode |
+
+### Why Libadwaita
+
+- Provides the visual identity expected by GNOME 45+ users (pill buttons, soft-gray-on-dark aesthetic)
+- `AdwNavigationSplitView` gives free mobile/desktop convergence — same code runs on Phosh / postmarketOS
+- Apps that do not use Libadwaita look out of place in the GNOME shell since GNOME 42
+
+### Blueprint (UI definition language)
+
+Stop writing XML `.ui` files. Blueprint is the community standard in 2026:
+- Declarative syntax (CSS/JSON feel), ~70% shorter than GtkBuilder XML
+- GNOME Builder has live preview
+- Compiles to standard `.ui` XML at build time — no runtime dependency
+
+### Distribution target
+
+**Flatpak** is the only correct distribution method for a GNOME app:
+- Bundles the exact Libadwaita/GTK4 version the app was built against
+- App does not break when the user updates their OS
+- Required for GNOME Circle membership
+
+### Rust consideration
+
+gtk4-rs is the fastest-growing choice in the GNOME ecosystem and the direction of new
+GNOME Circle apps (Loupe, Fractal, Snapshot). If the C++ codebase grows significantly
+before the refactor, evaluate porting the Linux client to Rust at that point.
+The non-UI layers (api_client, note_sync, local_store) map directly to Rust idioms.
+
+---
+
 ## Decisions log
 
 | Decision | Rationale |

@@ -42,7 +42,9 @@
       "Bash(sudo apt-get:*)",
       "Bash(pkg-config --exists libsoup-3.0 json-glib-1.0 gtk4 && echo \"OK\" || echo \"MISSING\")",
       "Bash(./build.sh 2>&1)",
-      "Bash(bash build.sh; echo \"EXIT: $?\")"
+      "Bash(bash build.sh; echo \"EXIT: $?\")",
+      "Bash(pkg-config --modversion gtkmm-4.0 2>&1)",
+      "Bash(dnf list:*)"
     ]
   }
 }
