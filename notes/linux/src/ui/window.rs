@@ -9,6 +9,7 @@ use crate::config;
 use crate::manager::{ManagerRef, NotesManager};
 use crate::model::{AmzFolder, AmzNote};
 use crate::ui::{AmzAuthView, AmzNoteRow};
+use crate::ui::md_formatter;
 
 mod imp {
     use super::*;
@@ -47,6 +48,14 @@ mod imp {
         // Manager
         pub manager: RefCell<Option<ManagerRef>>,
         pub loading_note: RefCell<bool>,
+
+        // Markdown formatting
+        /// Prevents re-entrant buffer modifications during image embedding.
+        pub is_formatting: RefCell<bool>,
+        /// Guards against scheduling multiple idle embed_images callbacks at once.
+        pub embed_pending: RefCell<bool>,
+        /// Child anchors we inserted for inline image display.
+        pub image_anchors: RefCell<Vec<gtk::TextChildAnchor>>,
 
         // Note list filter state — updated on folder/search change.
         // The CustomFilter reads these; call filter.changed() after mutating.
@@ -792,6 +801,45 @@ impl AmzWindow {
         dialog.present(Some(self));
     }
 
+    // ── Image embedding ───────────────────────────────────────────────────────
+
+    /// Schedule one `embed_images` call for the next GLib iteration.
+    /// Uses `embed_pending` so rapid typing doesn't pile up callbacks.
+    fn schedule_image_embed(&self) {
+        let imp = self.imp();
+        if *imp.embed_pending.borrow() {
+            return;
+        }
+        *imp.embed_pending.borrow_mut() = true;
+
+        let win_weak = self.downgrade();
+        glib::idle_add_local_once(move || {
+            if let Some(win) = win_weak.upgrade() {
+                *win.imp().embed_pending.borrow_mut() = false;
+                win.do_embed_images();
+            }
+        });
+    }
+
+    fn do_embed_images(&self) {
+        let imp = self.imp();
+        // Prevent re-entrancy (create_child_anchor fires connect_changed)
+        if *imp.is_formatting.borrow() {
+            return;
+        }
+        *imp.is_formatting.borrow_mut() = true;
+
+        let buffer = imp.text_view.buffer();
+        let view = imp.text_view.clone();
+        md_formatter::embed_images(
+            view.upcast_ref::<gtk::TextView>(),
+            &buffer,
+            &mut imp.image_anchors.borrow_mut(),
+        );
+
+        *imp.is_formatting.borrow_mut() = false;
+    }
+
     // ── setup_callbacks ───────────────────────────────────────────────────────
 
     fn setup_callbacks(&self) {
@@ -888,10 +936,39 @@ impl AmzWindow {
             move |_| win.prompt_new_folder()
         ));
 
+        // Set up markdown text-tags once, on the initial buffer.
+        md_formatter::setup_tags(&imp.text_view.buffer());
+
+        // Key controller for smart list continuation on Enter.
+        {
+            let key_ctrl = gtk::EventControllerKey::new();
+            let buf = imp.text_view.buffer();
+            key_ctrl.connect_key_pressed(move |_, key, _, _| {
+                if key == gdk::Key::Return || key == gdk::Key::KP_Enter {
+                    if md_formatter::handle_enter_key(&buf) {
+                        return glib::Propagation::Stop;
+                    }
+                }
+                glib::Propagation::Proceed
+            });
+            imp.text_view.add_controller(key_ctrl);
+        }
+
         imp.text_view.buffer().connect_changed(glib::clone!(
             #[weak(rename_to = win)]
             self,
-            move |_| win.on_editor_changed()
+            move |buf| {
+                // Guard: skip everything during our own buffer modifications
+                if *win.imp().is_formatting.borrow() {
+                    return;
+                }
+                // Debounced save
+                win.on_editor_changed();
+                // Live markdown tag formatting (TextTag ops don't re-trigger changed)
+                md_formatter::apply_formatting(buf);
+                // Image embedding deferred to next GLib iteration
+                win.schedule_image_embed();
+            }
         ));
 
         imp.search_button.connect_toggled(glib::clone!(

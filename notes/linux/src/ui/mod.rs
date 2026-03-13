@@ -1,4 +1,5 @@
 mod auth;
+mod md_formatter;
 mod note_row;
 mod window;
 

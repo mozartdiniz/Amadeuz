@@ -1853,4 +1853,42 @@ The app compiles clean (0 errors, 3 harmless dead-code warnings). `ninja -C buil
 
 > 📝 *Write here: what it felt like to hit 80 compile errors and watch them reduce to 32, then 6, then 1, then 0. The Rust compiler as a guide rather than an obstacle. Any particular error message that was genuinely helpful? Any that were misleading?*
 
+---
+
+## March 13, 2026 — Markdown formatting and inline images on Linux
+
+### Starting point: looking at Iotas
+
+Before writing anything, we looked at how [Iotas](https://gitlab.gnome.org/World/iotas) — a mature Python + GTK4 notes app — handles markdown. Their approach is two views: a `GtkSource.View` editing widget (raw markdown with syntax highlighting) and a `WebKit.WebView` for the rendered HTML. Smart list continuation lives in `list_formatter.py`, which intercepts the Enter key, checks the current line for bullet/ordered markers, and inserts the appropriate prefix.
+
+We can't use WebKit — the project rules say no browser engine wrappers. So the approach we chose is **live TextTag rendering**: the raw markdown stays in the buffer, and we apply `gtk::TextTag`s to make it look formatted. Headings render larger and bold. `**bold**` appears bold. `*italic*` appears italic. Code spans get a monospace font. This is sometimes called "WYSIWYG live preview" mode — you see the markdown syntax, but it's also visually styled.
+
+### The architecture
+
+Everything lives in `src/ui/md_formatter.rs`. Three concerns:
+
+**1. Tag formatting.** On every buffer change, `apply_formatting()` runs. It gets the text (excluding any child-anchor characters, so image widgets don't throw off byte positions), removes all our `md-*` tags, then re-applies them by feeding the content through `pulldown-cmark`'s `OffsetIter`. The iter gives us `(Event, ByteRange)` pairs. We push a `(tag_name, start_byte)` onto a stack on `Start` events, and pop + apply on `End` events. The tag spans the full element including delimiters (e.g., the `**` are bold, not just the text between them).
+
+The first line always gets the `md-title` tag regardless — because the app treats line 1 as the note title (it's what gets sent to the API's `title` field). Markdown H1-H6 formatting only applies to lines 2+.
+
+**2. Smart list continuation.** `handle_enter_key()` fires before GTK inserts the newline. It reads the current line up to the cursor and checks for bullet markers (longest first to prevent `- ` matching before `- [ ] `). If the line has content after the marker, it inserts `\n<indent><marker>`. If the line contains only the marker (the "I'm done with this list" signal), it deletes the marker and inserts a plain newline. Same logic for ordered lists (`1. `, `1) ` etc.), including auto-incrementing the number.
+
+**3. Inline images.** `embed_images()` runs via `glib::idle_add_local_once` — deferred one GLib iteration so it doesn't run inside the buffer-changed signal. It first removes existing child anchors (they're just 1-char deletions from the buffer), gets the clean text, finds `![alt](path)` patterns with a byte-scanner, and for each local file that exists, calls `buffer.create_child_anchor()` at the end of the `![...]()` span and attaches a `gtk::Picture` widget at that anchor. Images are inserted end-to-start to avoid byte-offset drift.
+
+The `is_formatting` flag prevents `create_child_anchor` (which fires `connect_changed`) from re-entering the formatting loop. The `embed_pending` flag collapses rapid keystrokes into a single idle callback so images aren't re-embedded dozens of times per second.
+
+### Why `pulldown-cmark` and not GtkSourceView?
+
+`gtksourceview5-devel` wasn't installed on the dev machine, and adding a new system dependency for what's essentially a syntax coloring baseline felt wrong. `pulldown-cmark` is a pure-Rust crate, no system deps, and it gives us byte-range positions for every markdown element — which is exactly what we need for TextTag application. Two compile errors, both trivial: `TagEnd::BlockQuote` needed `(_)` because it became a tuple variant in 0.12, and `anchor.deleted()` became `anchor.is_deleted()` in gtk4-rs. Fixed in under a minute.
+
+### How image embedding composes with tag formatting
+
+The buffer text (what gets saved to the server) never contains image widgets — `buffer.text(start, end, false)` excludes child anchors. So the note content is always clean markdown. The widgets are purely decorative. When a different note is selected, `set_text()` on the buffer wipes everything including anchor characters; the anchor objects in `image_anchors` become deleted (`.is_deleted()` returns true) and the cleanup code skips them gracefully.
+
+### Where things stand
+
+All three features compile and run. Typing `**word**` makes the whole span bold. `# Header` gets a larger font. Pressing Enter at the end of `- item` creates `- `. Local image paths embedded as `![alt](path)` show the image inline. The markdown text and the visual formatting coexist — the markup characters are visible but styled, which feels honest rather than hiding the syntax.
+
+> 📝 *Write here: your reaction to typing a heading for the first time and seeing the font actually get bigger. Does live-preview feel different from the old plain-text editor? Is there anything that felt janky or not quite right?*
+
 > 📝 *Write here: the experience of building a GTK4 app in Rust in 2026 compared to the C++ version. Same crate versions, same Blueprint file structure — but the Rust borrow checker catches the "win lives too long" lifetime bug that would have been a subtle crash in C++.*

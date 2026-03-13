@@ -299,6 +299,7 @@ Default server: `ws://localhost:8080/ws`
 | Config | GSettings (`com.amadeuz.Notes.gschema.xml`) |
 | Credentials | `secret-service` crate v3 (D-Bus Secret Service / GNOME Keyring) |
 | Async | Tokio (multi-thread) + tokio-tungstenite 0.26 + reqwest 0.12 |
+| Markdown | `pulldown-cmark` 0.12 (pure Rust) — TextTag formatting + image detection |
 | Channel | `async_channel` 2 (tokio → GTK main thread; glib::Sender removed in glib 0.21) |
 | Local data | `~/.local/share/amadeuz/data.json` (same format as all other clients) |
 
@@ -347,6 +348,7 @@ notes/linux/
     ├── ui/
     │   ├── mod.rs
     │   ├── auth.rs          ← AmzAuthView (AdwBin, CompositeTemplate)
+    │   ├── md_formatter.rs  ← Markdown TextTag formatting, smart-Enter list continuation, image embedding
     │   ├── note_row.rs      ← AmzNoteRow (GtkBox, CompositeTemplate)
     │   └── window.rs        ← AmzWindow (AdwApplicationWindow, CompositeTemplate)
     └── backend/
