@@ -1,0 +1,33 @@
+prefix := env_var_or_default("HOME", "/root") + "/.local"
+schema_dir := prefix + "/share/glib-2.0/schemas"
+bin := prefix + "/bin/amadeuz-notes"
+
+# Build and install (default)
+build:
+    ninja -C build
+    meson install -C build
+    glib-compile-schemas {{schema_dir}}
+
+# First-time setup
+setup:
+    meson setup build --prefix={{prefix}} -Dprofile=development
+
+# Build from scratch (clean setup)
+build-clean:
+    rm -rf build
+    meson setup build --prefix={{prefix}} -Dprofile=development
+    ninja -C build
+    meson install -C build
+    glib-compile-schemas {{schema_dir}}
+
+# Build and run
+dev: build
+    GSETTINGS_SCHEMA_DIR={{schema_dir}} {{bin}}
+
+# Run without rebuilding
+run:
+    GSETTINGS_SCHEMA_DIR={{schema_dir}} {{bin}}
+
+# Run with debug logging
+run-debug:
+    GSETTINGS_SCHEMA_DIR={{schema_dir}} RUST_LOG=debug {{bin}}

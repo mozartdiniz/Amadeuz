@@ -1,4 +1,5 @@
 use adw::subclass::prelude::*;
+use gtk::prelude::*;
 use gtk::{glib, CompositeTemplate, TemplateChild};
 
 use crate::model::AmzNote;
@@ -12,6 +13,7 @@ mod imp {
         #[template_child] pub title_label:   TemplateChild<gtk::Label>,
         #[template_child] pub date_label:    TemplateChild<gtk::Label>,
         #[template_child] pub preview_label: TemplateChild<gtk::Label>,
+        #[template_child] pub folder_label:  TemplateChild<gtk::Label>,
     }
 
     #[glib::object_subclass]
@@ -45,7 +47,7 @@ impl AmzNoteRow {
         glib::Object::new()
     }
 
-    pub fn bind_note(&self, note: &AmzNote) {
+    pub fn bind_note(&self, note: &AmzNote, folder_name: &str) {
         let imp = self.imp();
 
         let title = note.title();
@@ -58,6 +60,9 @@ impl AmzNoteRow {
         let preview: String = content.chars().take(80).collect();
         let preview = preview.replace('\n', " ");
         imp.preview_label.set_text(&preview);
+
+        imp.folder_label.set_text(folder_name);
+        imp.folder_label.set_visible(!folder_name.is_empty());
     }
 }
 

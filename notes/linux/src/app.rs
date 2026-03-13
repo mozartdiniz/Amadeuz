@@ -52,7 +52,15 @@ mod imp {
 
             // Create manager + event channel.
             let (mgr, rx) = NotesManager::new(server_url, saved_token);
-            mgr.borrow_mut().is_authenticated = is_authenticated;
+            {
+                let mut m = mgr.borrow_mut();
+                m.is_authenticated = is_authenticated;
+                // Populate stores from disk immediately so the UI is usable
+                // before the first sync completes (or if the server is offline).
+                if is_authenticated {
+                    m.load_local();
+                }
+            }
 
             // Attach event receiver to GLib main loop.
             glib::MainContext::default().spawn_local(glib::clone!(
@@ -71,7 +79,7 @@ mod imp {
             self.window.set(win.clone()).unwrap();
             win.present();
 
-            // If already authenticated, kick off a full sync.
+            // Kick off a full sync to merge with server state.
             if is_authenticated {
                 NotesManager::full_sync(mgr);
             }

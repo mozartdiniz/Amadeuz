@@ -59,9 +59,11 @@ pub struct NotesManager {
     pub debounce_source: Option<glib::SourceId>,
 
     /// Callback invoked (on main thread) when any relevant state changes.
-    pub on_state_changed: Option<Box<dyn Fn()>>,
-    pub on_auth_error: Option<Box<dyn Fn(String)>>,
-    pub on_recovery_code: Option<Box<dyn Fn(String)>>,
+    /// Stored as Rc so it can be cloned out of the borrow before being called
+    /// (calling while borrow_mut is held would cause a RefCell panic).
+    pub on_state_changed: Option<std::rc::Rc<dyn Fn()>>,
+    pub on_auth_error: Option<std::rc::Rc<dyn Fn(String)>>,
+    pub on_recovery_code: Option<std::rc::Rc<dyn Fn(String)>>,
 }
 
 impl NotesManager {
@@ -151,10 +153,11 @@ impl NotesManager {
         crate::spawn(async move {
             crate::backend::keyring::delete_token().await.ok();
         });
-
-        if let Some(cb) = &self.on_state_changed {
-            cb();
-        }
+        // on_state_changed is intentionally NOT called here: logout() is called
+        // while mgr is already borrow_mut'd by the caller, so invoking the
+        // callback (which calls refresh_ui → mgr.borrow()) would panic.
+        // The caller (sign_out in window.rs) calls refresh_ui() after releasing
+        // the borrow.
     }
 
     // ── Full sync (REST) ──────────────────────────────────────────────────────
@@ -178,83 +181,106 @@ impl NotesManager {
 
     pub fn handle_event(mgr: ManagerRef, event: AppEvent) {
         match event {
-            AppEvent::AuthSuccess {
-                token,
-                recovery_code,
-            } => {
-                {
+            AppEvent::AuthSuccess { token, recovery_code } => {
+                // Release the borrow_mut BEFORE calling any callback.
+                // on_state_changed = refresh_ui, which calls mgr.borrow() — that would
+                // panic if we're still holding borrow_mut here.
+                let (state_cb, recovery_cb) = {
                     let mut m = mgr.borrow_mut();
                     m.api.token = Some(token.clone());
                     m.is_authenticated = true;
-                    // Save token to keyring in background.
                     let tok = token.clone();
                     crate::spawn(async move {
                         crate::backend::keyring::save_token(&tok).await.ok();
                     });
-                    if let Some(cb) = &m.on_state_changed {
-                        cb();
-                    }
-                    if let Some(code) = recovery_code {
-                        if let Some(cb) = &m.on_recovery_code {
-                            cb(code);
-                        }
-                    }
-                }
+                    let state_cb = m.on_state_changed.clone();
+                    let recovery_cb = recovery_code.and_then(|code| {
+                        m.on_recovery_code.clone().map(|cb| (cb, code))
+                    });
+                    (state_cb, recovery_cb)
+                }; // borrow_mut released here
+                if let Some(cb) = state_cb { cb(); }
+                if let Some((cb, code)) = recovery_cb { cb(code); }
                 NotesManager::full_sync(mgr);
             }
 
             AppEvent::AuthError(msg) => {
-                let m = mgr.borrow();
-                if let Some(cb) = &m.on_auth_error {
-                    cb(msg);
-                }
+                let cb = mgr.borrow().on_auth_error.clone();
+                if let Some(cb) = cb { cb(msg); }
             }
 
             AppEvent::SyncComplete { folders, notes } => {
-                let mut m = mgr.borrow_mut();
-                m.is_connected = true;
-                m.apply_sync_result(folders, notes);
-                if let Some(cb) = &m.on_state_changed {
-                    cb();
-                }
+                let state_cb = {
+                    let mut m = mgr.borrow_mut();
+                    m.is_connected = true;
+                    m.apply_sync_result(folders, notes);
+                    m.on_state_changed.clone()
+                };
+                if let Some(cb) = state_cb { cb(); }
             }
 
             AppEvent::SyncError => {
-                let mut m = mgr.borrow_mut();
-                m.is_connected = false;
-                if let Some(cb) = &m.on_state_changed {
-                    cb();
-                }
+                let state_cb = {
+                    let mut m = mgr.borrow_mut();
+                    m.is_connected = false;
+                    m.on_state_changed.clone()
+                };
+                if let Some(cb) = state_cb { cb(); }
             }
 
-            AppEvent::NoteWsUpdate {
-                note_id,
-                title,
-                content,
-                updated_at,
-            } => {
-                let mut m = mgr.borrow_mut();
-                m.apply_ws_update(&note_id, title, content, updated_at);
-                if let Some(cb) = &m.on_state_changed {
-                    cb();
-                }
+            AppEvent::NoteWsUpdate { note_id, title, content, updated_at } => {
+                let state_cb = {
+                    let mut m = mgr.borrow_mut();
+                    m.apply_ws_update(&note_id, title, content, updated_at);
+                    m.on_state_changed.clone()
+                };
+                if let Some(cb) = state_cb { cb(); }
             }
 
             AppEvent::WsConnected => {
-                let mut m = mgr.borrow_mut();
-                m.is_connected = true;
-                if let Some(cb) = &m.on_state_changed {
-                    cb();
-                }
+                let state_cb = {
+                    let mut m = mgr.borrow_mut();
+                    m.is_connected = true;
+                    m.on_state_changed.clone()
+                };
+                if let Some(cb) = state_cb { cb(); }
             }
 
             AppEvent::WsDisconnected => {
-                let mut m = mgr.borrow_mut();
-                m.is_connected = false;
-                if let Some(cb) = &m.on_state_changed {
-                    cb();
-                }
+                let state_cb = {
+                    let mut m = mgr.borrow_mut();
+                    m.is_connected = false;
+                    m.on_state_changed.clone()
+                };
+                if let Some(cb) = state_cb { cb(); }
             }
+        }
+    }
+
+    /// Populate the list stores from local disk immediately.
+    /// Called on startup (when a saved token exists) so the UI is usable
+    /// before the first server sync completes or if the server is unreachable.
+    pub fn load_local(&mut self) {
+        let data = local_store::load();
+
+        self.folder_store.remove_all();
+        for f in &data.folders {
+            self.folder_store
+                .append(&AmzFolder::new(&f.id, &f.name, f.created_at));
+        }
+
+        let mut notes = data.notes.clone();
+        notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        self.note_store.remove_all();
+        for n in &notes {
+            self.note_store.append(&AmzNote::new(
+                &n.id,
+                &n.title,
+                &n.content,
+                n.folder_id.as_deref().unwrap_or(""),
+                n.updated_at,
+                n.created_at,
+            ));
         }
     }
 
@@ -385,7 +411,7 @@ impl NotesManager {
         mgr.borrow_mut().debounce_source = Some(src);
     }
 
-    fn flush_note(&mut self, id: &str, title: String, content: String) {
+    pub fn flush_note(&mut self, id: &str, title: String, content: String) {
         let now = now_ms();
         if let Some(note) = self.find_note(id) {
             // Skip if unchanged.

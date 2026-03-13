@@ -4,8 +4,8 @@ using Adw 1;
 template $AmzWindow : Adw.ApplicationWindow {
   width-request: 360;
   height-request: 500;
-  default-width: 1280;
-  default-height: 800;
+  default-width: 960;
+  default-height: 640;
 
   // Root stack: auth view or main view.
   content: Gtk.Stack main_stack {
@@ -160,12 +160,6 @@ template $AmzWindow : Adw.ApplicationWindow {
             child: Adw.ToolbarView editor_toolbar {
               [top]
               Adw.HeaderBar {
-                title-widget: Gtk.Entry title_entry {
-                  placeholder-text: _("Note title…");
-                  hexpand: true;
-                  styles ["title"]
-                };
-
                 [end]
                 Gtk.Button delete_note_button {
                   icon-name: "edit-delete-symbolic";
