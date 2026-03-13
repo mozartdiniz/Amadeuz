@@ -1,3 +1,4 @@
+use gtk::pango;
 use gtk::prelude::*;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -75,8 +76,7 @@ pub fn setup_tags(buffer: &gtk::TextBuffer) {
         t.set_property("weight", 700i32);
     });
     add(TAG_ITALIC, &|t| {
-        // pango Style::Italic = 2
-        t.set_property("style", 2i32);
+        t.set_property("style", pango::Style::Italic);
     });
     add(TAG_CODE, &|t| {
         t.set_property("family", "monospace");
@@ -91,8 +91,7 @@ pub fn setup_tags(buffer: &gtk::TextBuffer) {
         t.set_property("foreground", "#888888");
     });
     add(TAG_LINK, &|t| {
-        // pango Underline::Single = 1
-        t.set_property("underline", 1i32);
+        t.set_property("underline", pango::Underline::Single);
         t.set_property("foreground", "#0078d4");
     });
 }
