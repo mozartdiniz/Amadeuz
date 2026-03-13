@@ -1,3 +1,5 @@
+use gtk::gdk;
+use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -243,6 +245,28 @@ fn apply_syntax_dimming(buffer: &gtk::TextBuffer, text: &str, base: i32) {
         }
 
         byte_pos += line.len() + 1;
+    }
+
+    // ── Image markdown: gray out the entire `![alt](path)` block ─────────
+    {
+        let mut search = text;
+        let mut offset = 0usize;
+        while let Some(rel) = search.find("![") {
+            let start = offset + rel;
+            let rest = &text[start..];
+            if let Some(cb) = rest.find("](") {
+                let after = &rest[cb + 2..];
+                if let Some(cp) = after.find(')') {
+                    let end = start + cb + 2 + cp + 1;
+                    apply_range(buffer, text, base, TAG_SYNTAX, start, end);
+                    offset = end;
+                    search = &text[offset..];
+                    continue;
+                }
+            }
+            offset = start + 2;
+            search = &text[offset..];
+        }
     }
 }
 
@@ -567,6 +591,7 @@ pub fn embed_images(
     view: &gtk::TextView,
     buffer: &gtk::TextBuffer,
     anchors: &mut Vec<gtk::TextChildAnchor>,
+    note_id: &str,
 ) {
     // ── Step 1: remove old anchors ───────────────────────────────────────
     for anchor in anchors.drain(..) {
@@ -596,25 +621,47 @@ pub fn embed_images(
     let base_char = text[..content_byte_start].chars().count() as i32;
 
     // ── Step 3: find and embed images (end → start) ──────────────────────
+    #[allow(deprecated)]
+    let editor_w = view.allocated_width();
+    let max_w = if editor_w > 100 { (editor_w as f64 * 0.80) as i32 } else { 700 };
+
     for (_start_byte, end_byte, path) in find_images(content) {
-        let abs_path = expand_path(&path);
+        let abs_path = if let Some(filename) = path.strip_prefix("amz-image://") {
+            image_store_dir(note_id).join(filename)
+        } else {
+            expand_path(&path)
+        };
         if !abs_path.exists() {
             continue;
         }
 
-        // Char offset in the buffer for the end of the image markdown
         let end_char = base_char + content[..end_byte].chars().count() as i32;
+
+        let texture = match gdk::Texture::from_filename(&abs_path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let (disp_w, disp_h) = clamp_size(texture.width(), texture.height(), max_w, max_w);
+
+        let picture = gtk::Picture::for_paintable(&texture);
+        picture.set_size_request(disp_w, disp_h);
+        picture.set_content_fit(gtk::ContentFit::Fill);
+        picture.set_margin_top(6);
+        picture.set_margin_bottom(6);
 
         let mut insert_at = buffer.iter_at_offset(end_char);
         let anchor = buffer.create_child_anchor(&mut insert_at);
-
-        let picture = gtk::Picture::for_filename(abs_path);
-        picture.set_size_request(400, -1);
-        picture.set_content_fit(gtk::ContentFit::ScaleDown);
-
         view.add_child_at_anchor(&picture, &anchor);
         anchors.push(anchor);
     }
+}
+
+fn clamp_size(w: i32, h: i32, max_w: i32, max_h: i32) -> (i32, i32) {
+    if w <= 0 || h <= 0 {
+        return (max_w, max_h);
+    }
+    let scale = (max_w as f64 / w as f64).min(max_h as f64 / h as f64).min(1.0);
+    ((w as f64 * scale).round() as i32, (h as f64 * scale).round() as i32)
 }
 
 fn expand_path(path: &str) -> std::path::PathBuf {
@@ -624,4 +671,54 @@ fn expand_path(path: &str) -> std::path::PathBuf {
         }
     }
     std::path::PathBuf::from(path)
+}
+
+// ── Image storage ─────────────────────────────────────────────────────────────
+
+pub fn image_store_dir(note_id: &str) -> std::path::PathBuf {
+    glib::user_data_dir().join("amadeuz").join("images").join(note_id)
+}
+
+pub fn is_image_file(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif")
+    )
+}
+
+pub fn copy_image_to_note(note_id: &str, src: &std::path::Path) -> Option<String> {
+    let ext = src.extension()?.to_str()?.to_lowercase();
+    let dir = image_store_dir(note_id);
+    std::fs::create_dir_all(&dir).ok()?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let filename = format!("{}.{}", ts, ext);
+    std::fs::copy(src, dir.join(&filename)).ok()?;
+    Some(format!("amz-image://{}", filename))
+}
+
+pub fn delete_note_images(note_id: &str) {
+    std::fs::remove_dir_all(image_store_dir(note_id)).ok();
+}
+
+pub fn cleanup_orphaned_images(note_id: &str, content: &str) {
+    let dir = image_store_dir(note_id);
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let prefix = "amz-image://";
+    let mut referenced = std::collections::HashSet::new();
+    let mut hay = content;
+    while let Some(pos) = hay.find(prefix) {
+        let rest = &hay[pos + prefix.len()..];
+        let end = rest.find(|c: char| c == ')' || c.is_whitespace()).unwrap_or(rest.len());
+        referenced.insert(rest[..end].to_string());
+        hay = &rest[end..];
+    }
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !referenced.contains(&name) {
+            std::fs::remove_file(entry.path()).ok();
+        }
+    }
 }

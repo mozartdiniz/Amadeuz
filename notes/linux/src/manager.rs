@@ -10,6 +10,9 @@ use crate::backend::local_store::{self, FolderRecord, NoteRecord};
 use crate::backend::sync_worker::NoteSync;
 use crate::model::{AmzFolder, AmzNote};
 
+/// Reserved folder ID for soft-deleted notes.
+pub const WASTEBASKET_ID: &str = "__wastebasket__";
+
 // ── AppEvent: sent from tokio tasks → GTK main thread ─────────────────────────
 
 #[derive(Debug)]
@@ -360,6 +363,16 @@ impl NotesManager {
             api.create_note(&record).await.ok();
         });
         Some(id)
+    }
+
+    /// Move a note to the wastebasket (soft delete).
+    pub fn trash_note(&mut self, id: &str) {
+        self.move_note(id, Some(WASTEBASKET_ID.to_string()));
+    }
+
+    /// Move a note out of the wastebasket back to "No Folder".
+    pub fn restore_note(&mut self, id: &str) {
+        self.move_note(id, None);
     }
 
     pub fn delete_note(&mut self, id: &str) {

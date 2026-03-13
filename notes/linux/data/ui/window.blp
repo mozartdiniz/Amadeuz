@@ -33,6 +33,13 @@ template $AmzWindow : Adw.ApplicationWindow {
         child: Adw.ToolbarView {
           [top]
           Adw.HeaderBar {
+            [start]
+            Gtk.Button new_folder_button {
+              icon-name: "list-add-symbolic";
+              tooltip-text: _("New Folder");
+              styles ["flat"]
+            }
+
             title-widget: Gtk.Label {
               label: _("Amadeuz Notes");
               styles ["heading"]
@@ -79,6 +86,20 @@ template $AmzWindow : Adw.ApplicationWindow {
                 }
               }
 
+              Gtk.Revealer new_folder_revealer {
+                reveal-child: false;
+                transition-type: slide_down;
+                transition-duration: 150;
+
+                Gtk.Entry new_folder_entry {
+                  placeholder-text: _("New folder name…");
+                  margin-start: 12;
+                  margin-end: 12;
+                  margin-top: 4;
+                  margin-bottom: 4;
+                }
+              }
+
               Gtk.Separator {}
 
               Gtk.ListBox folder_list {
@@ -89,12 +110,27 @@ template $AmzWindow : Adw.ApplicationWindow {
           }
 
           [bottom]
-          Gtk.ActionBar {
-            [start]
-            Gtk.Button new_folder_button {
-              icon-name: "folder-new-symbolic";
-              tooltip-text: _("New Folder");
-              styles ["flat"]
+          Gtk.ListBox wastebasket_list {
+            selection-mode: single;
+            styles ["navigation-sidebar"]
+
+            Gtk.ListBoxRow {
+              Gtk.Box {
+                margin-start: 12;
+                margin-end: 12;
+                margin-top: 6;
+                margin-bottom: 6;
+                spacing: 8;
+
+                Gtk.Image {
+                  icon-name: "user-trash-symbolic";
+                }
+                Gtk.Label {
+                  label: _("Recently Deleted");
+                  hexpand: true;
+                  halign: start;
+                }
+              }
             }
           }
         };
@@ -118,25 +154,9 @@ template $AmzWindow : Adw.ApplicationWindow {
               [top]
               Adw.HeaderBar {
                 [start]
-                Gtk.ToggleButton search_button {
-                  icon-name: "system-search-symbolic";
-                  tooltip-text: _("Search");
-                }
-
-                [end]
                 Gtk.Button new_note_button {
                   icon-name: "list-add-symbolic";
                   tooltip-text: _("New Note");
-                }
-              }
-
-              [top]
-              Gtk.SearchBar search_bar {
-                key-capture-widget: main_stack;
-
-                Gtk.SearchEntry search_entry {
-                  placeholder-text: _("Search notes…");
-                  hexpand: true;
                 }
               }
 
@@ -154,17 +174,41 @@ template $AmzWindow : Adw.ApplicationWindow {
 
           // Right column: editor
           content: Adw.NavigationPage editor_page {
-            title: _("Editor");
+            title: "";
             tag: "editor";
 
             child: Adw.ToolbarView editor_toolbar {
               [top]
               Adw.HeaderBar {
+                [start]
+                Gtk.ToggleButton search_button {
+                  icon-name: "system-search-symbolic";
+                  tooltip-text: _("Search");
+                }
+
+                title-widget: Gtk.Stack search_stack {
+                  transition-type: crossfade;
+                  transition-duration: 150;
+
+                  Gtk.StackPage {
+                    name: "empty";
+                    child: Gtk.Label { label: ""; };
+                  }
+
+                  Gtk.StackPage {
+                    name: "search";
+                    child: Gtk.SearchEntry search_entry {
+                      placeholder-text: _("Search notes…");
+                      hexpand: true;
+                    };
+                  }
+                };
+
                 [end]
                 Gtk.Button delete_note_button {
-                  icon-name: "edit-delete-symbolic";
-                  tooltip-text: _("Delete Note");
-                  styles ["destructive-action", "flat"]
+                  icon-name: "user-trash-symbolic";
+                  tooltip-text: _("Move to Trash");
+                  styles ["flat"]
                 }
               }
 

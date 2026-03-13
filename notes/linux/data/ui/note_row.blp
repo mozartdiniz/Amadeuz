@@ -3,7 +3,7 @@ using Adw 1;
 
 template $AmzNoteRow : Gtk.Box {
   orientation: vertical;
-  spacing: 3;
+  spacing: 2;
   margin-top: 10;
   margin-bottom: 10;
   margin-start: 12;
@@ -16,22 +16,25 @@ template $AmzNoteRow : Gtk.Box {
     styles ["body"]
   }
 
+  Gtk.Label preview_label {
+    halign: start;
+    hexpand: true;
+    ellipsize: end;
+    max-width-chars: 40;
+    styles ["caption", "dim-label"]
+  }
+
   Gtk.Box {
     spacing: 8;
 
-    Gtk.Label date_label {
-      halign: start;
-      styles ["caption", "dim-label"]
-    }
-
-    Gtk.Label preview_label {
+    Gtk.Label folder_label {
       halign: start;
       hexpand: true;
       ellipsize: end;
       styles ["caption", "dim-label"]
     }
 
-    Gtk.Label folder_label {
+    Gtk.Label date_label {
       halign: end;
       styles ["caption", "dim-label"]
     }

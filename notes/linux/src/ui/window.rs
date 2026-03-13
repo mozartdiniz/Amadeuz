@@ -6,7 +6,7 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib, CompositeTemplate, TemplateChild};
 
 use crate::config;
-use crate::manager::{ManagerRef, NotesManager};
+use crate::manager::{ManagerRef, NotesManager, WASTEBASKET_ID};
 use crate::model::{AmzFolder, AmzNote};
 use crate::ui::{AmzAuthView, AmzNoteRow};
 use crate::ui::md_formatter;
@@ -26,15 +26,18 @@ mod imp {
         #[template_child] pub inner_split: TemplateChild<adw::NavigationSplitView>,
 
         // Folders
-        #[template_child] pub all_notes_list:    TemplateChild<gtk::ListBox>,
-        #[template_child] pub folder_list:       TemplateChild<gtk::ListBox>,
-        #[template_child] pub new_folder_button: TemplateChild<gtk::Button>,
+        #[template_child] pub all_notes_list:       TemplateChild<gtk::ListBox>,
+        #[template_child] pub wastebasket_list:     TemplateChild<gtk::ListBox>,
+        #[template_child] pub folder_list:          TemplateChild<gtk::ListBox>,
+        #[template_child] pub new_folder_button:    TemplateChild<gtk::Button>,
+        #[template_child] pub new_folder_revealer:  TemplateChild<gtk::Revealer>,
+        #[template_child] pub new_folder_entry:     TemplateChild<gtk::Entry>,
 
         // Notes list
         #[template_child] pub note_list:       TemplateChild<gtk::ListBox>,
         #[template_child] pub new_note_button: TemplateChild<gtk::Button>,
         #[template_child] pub search_button:   TemplateChild<gtk::ToggleButton>,
-        #[template_child] pub search_bar:      TemplateChild<gtk::SearchBar>,
+        #[template_child] pub search_stack:    TemplateChild<gtk::Stack>,
         #[template_child] pub search_entry:    TemplateChild<gtk::SearchEntry>,
 
         // Editor
@@ -287,7 +290,7 @@ impl AmzWindow {
                     let Some(note) = obj.downcast_ref::<AmzNote>() else { return true };
 
                     let folder_ok = match imp.note_filter_folder.borrow().as_deref() {
-                        None | Some("__all__") => true,
+                        None | Some("__all__") => note.folder_id() != WASTEBASKET_ID,
                         Some(fid) => note.folder_id() == fid,
                     };
                     if !folder_ok { return false; }
@@ -350,16 +353,35 @@ impl AmzWindow {
     fn refresh_ui(&self) {
         let imp = self.imp();
         let Some(mgr) = imp.manager.borrow().clone() else { return };
-        let m = mgr.borrow();
 
-        if m.is_authenticated {
+        let (is_authenticated, is_connected, selected_note_id) = {
+            let m = mgr.borrow();
+            (m.is_authenticated, m.is_connected, m.selected_note_id.clone())
+        };
+
+        if is_authenticated {
             imp.main_stack.set_visible_child_name("main");
-            if m.is_connected {
+            if is_connected {
                 imp.status_icon.set_icon_name(Some("network-transmit-receive-symbolic"));
                 imp.status_label.set_text("Synced");
             } else {
                 imp.status_icon.set_icon_name(Some("network-offline-symbolic"));
                 imp.status_label.set_text("Offline");
+            }
+
+            // Auto-select the first note if none is currently selected.
+            if selected_note_id.is_none() {
+                let first_note_id = imp.note_filter_model.borrow()
+                    .as_ref()
+                    .and_then(|m| m.item(0))
+                    .and_downcast::<AmzNote>()
+                    .map(|n| n.id());
+                if let Some(id) = first_note_id {
+                    if let Some(row) = imp.note_list.row_at_index(0) {
+                        imp.note_list.select_row(Some(&row));
+                    }
+                    self.on_note_selected(&id);
+                }
             }
         } else {
             imp.main_stack.set_visible_child_name("auth");
@@ -478,6 +500,8 @@ impl AmzWindow {
         if folder_id.is_some() {
             imp.all_notes_list.unselect_all();
         }
+        imp.wastebasket_list.unselect_all();
+        imp.new_note_button.set_sensitive(true);
         *imp.note_filter_folder.borrow_mut() = folder_id.clone();
         if let Some(f) = imp.note_filter.borrow().as_ref() {
             f.changed(gtk::FilterChange::Different);
@@ -494,6 +518,8 @@ impl AmzWindow {
     fn on_all_notes_selected(&self) {
         let imp = self.imp();
         imp.folder_list.unselect_all();
+        imp.wastebasket_list.unselect_all();
+        imp.new_note_button.set_sensitive(true);
         *imp.note_filter_folder.borrow_mut() = Some("__all__".into());
         if let Some(f) = imp.note_filter.borrow().as_ref() {
             f.changed(gtk::FilterChange::Different);
@@ -501,6 +527,24 @@ impl AmzWindow {
         if let Some(mgr) = imp.manager.borrow().clone() {
             let mut m = mgr.borrow_mut();
             m.selected_folder_id = Some("__all__".into());
+            m.selected_note_id = None;
+            m.disconnect_note_ws();
+        }
+        self.clear_editor();
+    }
+
+    fn on_wastebasket_selected(&self) {
+        let imp = self.imp();
+        imp.all_notes_list.unselect_all();
+        imp.folder_list.unselect_all();
+        imp.new_note_button.set_sensitive(false);
+        *imp.note_filter_folder.borrow_mut() = Some(WASTEBASKET_ID.to_string());
+        if let Some(f) = imp.note_filter.borrow().as_ref() {
+            f.changed(gtk::FilterChange::Different);
+        }
+        if let Some(mgr) = imp.manager.borrow().clone() {
+            let mut m = mgr.borrow_mut();
+            m.selected_folder_id = Some(WASTEBASKET_ID.to_string());
             m.selected_note_id = None;
             m.disconnect_note_ws();
         }
@@ -526,6 +570,7 @@ impl AmzWindow {
             let buf = imp.text_view.buffer();
             let full = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
             let (title, content) = split_title_content(&full);
+            md_formatter::cleanup_orphaned_images(&prev_id, &content);
             mgr.borrow_mut().flush_note(&prev_id, title, content);
         }
 
@@ -541,6 +586,14 @@ impl AmzWindow {
         let Some(note) = note else { return };
 
         mgr.borrow_mut().selected_note_id = Some(note_id.to_owned());
+
+        let in_trash = note.folder_id() == WASTEBASKET_ID;
+        imp.new_note_button.set_sensitive(!in_trash);
+        imp.delete_note_button.set_tooltip_text(Some(if in_trash {
+            "Delete Permanently"
+        } else {
+            "Move to Trash"
+        }));
 
         // Combine title + content into one text blob (first line = title).
         let combined = {
@@ -588,30 +641,6 @@ impl AmzWindow {
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
-    fn prompt_new_folder(&self) {
-        let entry = adw::EntryRow::new();
-        entry.set_title("Folder name");
-        let dialog = adw::AlertDialog::new(Some("New Folder"), None);
-        dialog.set_extra_child(Some(&entry));
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("create", "Create");
-        dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);
-        dialog.set_default_response(Some("create"));
-        let win = self.clone();
-        dialog.connect_response(Some("create"), move |d, _| {
-            let name = d.extra_child()
-                .and_downcast::<adw::EntryRow>()
-                .map(|e| e.text().to_string())
-                .unwrap_or_default();
-            if !name.is_empty() {
-                if let Some(mgr) = win.imp().manager.borrow().clone() {
-                    mgr.borrow_mut().create_folder(name);
-                }
-            }
-        });
-        dialog.present(Some(self));
-    }
-
     /// Emit notify::folder-id on every note in `folder_id` so their row
     /// refresh closures re-look up the (just-changed) folder name.
     fn refresh_notes_for_folder(&self, folder_id: &str) {
@@ -648,27 +677,25 @@ impl AmzWindow {
     }
 
     fn show_note_context_menu(&self, note_id: String, x: f64, y: f64, widget: &gtk::Widget) {
-        let folder_store = match self.imp().manager.borrow().as_ref() {
-            Some(m) => m.borrow().folder_store.clone(),
-            None => return,
+        let imp = self.imp();
+        let mgr_opt = imp.manager.borrow().clone();
+        let Some(mgr) = mgr_opt else { return };
+
+        // Determine if this note is in the wastebasket.
+        let in_trash = {
+            let m = mgr.borrow();
+            (0..m.note_store.n_items()).any(|i| {
+                m.note_store.item(i).and_downcast::<AmzNote>()
+                    .map(|n| n.id() == note_id && n.folder_id() == WASTEBASKET_ID)
+                    .unwrap_or(false)
+            })
         };
 
-        // Header label
-        let header = gtk::Label::new(Some("Move to Folder"));
-        header.add_css_class("heading");
-        header.set_margin_top(8);
-        header.set_margin_bottom(4);
-        header.set_margin_start(12);
-        header.set_margin_end(12);
-
-        let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
-
-        // Folder list
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
         list.add_css_class("navigation-sidebar");
 
-        let make_row = |label: &str| {
+        let make_row = |label: &str, name: &str| {
             let lbl = gtk::Label::new(Some(label));
             lbl.set_halign(gtk::Align::Start);
             lbl.set_margin_start(12);
@@ -676,59 +703,122 @@ impl AmzWindow {
             lbl.set_margin_top(6);
             lbl.set_margin_bottom(6);
             let row = gtk::ListBoxRow::new();
+            row.set_widget_name(name);
             row.set_child(Some(&lbl));
             row
         };
 
-        // Index 0 = "No Folder"
-        list.append(&make_row("No Folder"));
-        for i in 0..folder_store.n_items() {
-            if let Some(folder) = folder_store.item(i).and_downcast::<AmzFolder>() {
-                let row = make_row(&folder.name());
-                // Store folder id so we can retrieve it on activate.
-                row.set_widget_name(&folder.id());
-                list.append(&row);
-            }
-        }
-
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        vbox.append(&header);
-        vbox.append(&sep);
-        vbox.append(&list);
 
         let popover = gtk::Popover::new();
-        popover.set_child(Some(&vbox));
         popover.set_parent(widget);
         popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
         popover.set_has_arrow(false);
         popover.connect_closed(|p| p.unparent());
-        popover.popup();
 
-        // Wire row clicks directly — no GAction needed.
         let win_weak = self.downgrade();
         let popover_weak = popover.downgrade();
-        list.connect_row_activated(move |_, row| {
-            let idx = row.index();
-            let folder_id = if idx == 0 {
-                None
-            } else {
-                let name = row.widget_name().to_string();
-                if name.is_empty() { None } else { Some(name) }
-            };
 
-            if let Some(win) = win_weak.upgrade() {
-                if let Some(mgr) = win.imp().manager.borrow().clone() {
-                    mgr.borrow_mut().move_note(&note_id, folder_id);
+        if in_trash {
+            // Wastebasket context: Restore + Delete Permanently
+            list.append(&make_row("Restore", "__restore__"));
+            list.append(&make_row("Delete Permanently", "__delete_perm__"));
+
+            list.connect_row_activated(move |_, row| {
+                let action = row.widget_name().to_string();
+                if let Some(win) = win_weak.upgrade() {
+                    let imp = win.imp();
+                    match action.as_str() {
+                        "__restore__" => {
+                            if let Some(mgr) = imp.manager.borrow().clone() {
+                                mgr.borrow_mut().restore_note(&note_id);
+                            }
+                            if let Some(f) = imp.note_filter.borrow().as_ref() {
+                                f.changed(gtk::FilterChange::Different);
+                            }
+                            win.clear_editor();
+                        }
+                        "__delete_perm__" => {
+                            win.prompt_permanent_delete(&note_id);
+                        }
+                        _ => {}
+                    }
                 }
-                let filter = win.imp().note_filter.borrow().clone();
-                if let Some(f) = filter.as_ref() {
-                    f.changed(gtk::FilterChange::Different);
+                if let Some(p) = popover_weak.upgrade() {
+                    p.popdown();
+                }
+            });
+        } else {
+            // Normal context: Move to Folder
+            let folder_store = mgr.borrow().folder_store.clone();
+
+            let header = gtk::Label::new(Some("Move to Folder"));
+            header.add_css_class("heading");
+            header.set_margin_top(8);
+            header.set_margin_bottom(4);
+            header.set_margin_start(12);
+            header.set_margin_end(12);
+            let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
+            vbox.append(&header);
+            vbox.append(&sep);
+
+            // Index 0 = "No Folder"
+            list.append(&make_row("No Folder", "__no_folder__"));
+            for i in 0..folder_store.n_items() {
+                if let Some(folder) = folder_store.item(i).and_downcast::<AmzFolder>() {
+                    list.append(&make_row(&folder.name(), &folder.id()));
                 }
             }
-            if let Some(p) = popover_weak.upgrade() {
-                p.popdown();
+
+            list.connect_row_activated(move |_, row| {
+                let name = row.widget_name().to_string();
+                let folder_id = if name == "__no_folder__" || name.is_empty() {
+                    None
+                } else {
+                    Some(name)
+                };
+                if let Some(win) = win_weak.upgrade() {
+                    if let Some(mgr) = win.imp().manager.borrow().clone() {
+                        mgr.borrow_mut().move_note(&note_id, folder_id);
+                    }
+                    let filter = win.imp().note_filter.borrow().clone();
+                    if let Some(f) = filter.as_ref() {
+                        f.changed(gtk::FilterChange::Different);
+                    }
+                }
+                if let Some(p) = popover_weak.upgrade() {
+                    p.popdown();
+                }
+            });
+        }
+
+        vbox.append(&list);
+        popover.set_child(Some(&vbox));
+        popover.popup();
+    }
+
+    fn prompt_permanent_delete(&self, note_id: &str) {
+        let dialog = adw::AlertDialog::new(
+            Some("Delete Permanently?"),
+            Some("This note will be deleted forever and cannot be recovered."),
+        );
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("delete", "Delete Permanently");
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        let win = self.clone();
+        let id = note_id.to_owned();
+        dialog.connect_response(Some("delete"), move |_, _| {
+            let imp = win.imp();
+            md_formatter::delete_note_images(&id);
+            if let Some(mgr) = imp.manager.borrow().clone() {
+                mgr.borrow_mut().delete_note(&id);
             }
+            if let Some(f) = imp.note_filter.borrow().as_ref() {
+                f.changed(gtk::FilterChange::Different);
+            }
+            win.clear_editor();
         });
+        dialog.present(Some(self));
     }
 
     fn sign_out(&self) {
@@ -801,6 +891,41 @@ impl AmzWindow {
         dialog.present(Some(self));
     }
 
+    // ── Image paste ──────────────────────────────────────────────────────────
+
+    fn handle_image_paste(&self) -> bool {
+        use gtk::prelude::WidgetExt;
+        let clipboard = WidgetExt::display(self).clipboard();
+        if !clipboard.formats().contains_type(gdk::FileList::static_type()) {
+            return false;
+        }
+        let note_id = self.imp().manager.borrow()
+            .as_ref()
+            .and_then(|m| m.borrow().selected_note_id.clone());
+        let Some(note_id) = note_id else { return false };
+
+        let win_weak = self.downgrade();
+        clipboard.read_value_async(
+            gdk::FileList::static_type(),
+            glib::Priority::DEFAULT,
+            gio::Cancellable::NONE,
+            move |result: Result<glib::Value, glib::Error>| {
+                let Ok(value) = result else { return };
+                let Ok(file_list) = value.get::<gdk::FileList>() else { return };
+                let Some(win) = win_weak.upgrade() else { return };
+                let buf = win.imp().text_view.buffer();
+                for file in file_list.files() {
+                    let Some(path) = file.path() else { continue };
+                    if !md_formatter::is_image_file(&path) { continue }
+                    let Some(uri) = md_formatter::copy_image_to_note(&note_id, &path) else { continue };
+                    let alt = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+                    buf.insert_at_cursor(&format!("\n![{}]({})\n", alt, uri));
+                }
+            },
+        );
+        true
+    }
+
     // ── Image embedding ───────────────────────────────────────────────────────
 
     /// Schedule one `embed_images` call for the next GLib iteration.
@@ -823,10 +948,14 @@ impl AmzWindow {
 
     fn do_embed_images(&self) {
         let imp = self.imp();
-        // Prevent re-entrancy (create_child_anchor fires connect_changed)
         if *imp.is_formatting.borrow() {
             return;
         }
+        let note_id = imp.manager.borrow()
+            .as_ref()
+            .and_then(|m| m.borrow().selected_note_id.clone())
+            .unwrap_or_default();
+
         *imp.is_formatting.borrow_mut() = true;
 
         let buffer = imp.text_view.buffer();
@@ -835,6 +964,7 @@ impl AmzWindow {
             view.upcast_ref::<gtk::TextView>(),
             &buffer,
             &mut imp.image_anchors.borrow_mut(),
+            &note_id,
         );
 
         *imp.is_formatting.borrow_mut() = false;
@@ -850,6 +980,12 @@ impl AmzWindow {
             #[weak(rename_to = win)]
             self,
             move |_, _| win.on_all_notes_selected()
+        ));
+
+        imp.wastebasket_list.connect_row_activated(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_, _| win.on_wastebasket_selected()
         ));
 
         // Folder list: look up the folder by row index in the folder_store.
@@ -901,15 +1037,19 @@ impl AmzWindow {
                 if let Some(mgr) = mgr {
                     let folder_id = mgr.borrow().selected_folder_id.clone()
                         .filter(|id| id != "__all__");
-                    // Bind to a let first so the RefMut temporary is dropped at the
-                    // semicolon — not held alive across the if-let body.
-                    // If we wrote `if let Some(id) = mgr.borrow_mut().create_note(...)`,
-                    // Rust would keep the RefMut alive for the whole body, causing a
-                    // "RefCell already borrowed" panic when on_note_selected also
-                    // tries borrow_mut.
                     let note_id = mgr.borrow_mut().create_note(folder_id);
                     if let Some(note_id) = note_id {
                         win.on_note_selected(&note_id);
+                        // Select the row on the next GTK iteration once the filter model
+                        // has had a chance to insert the new row.
+                        let win2 = win.downgrade();
+                        glib::idle_add_local_once(move || {
+                            if let Some(w) = win2.upgrade() {
+                                if let Some(row) = w.imp().note_list.row_at_index(0) {
+                                    w.imp().note_list.select_row(Some(&row));
+                                }
+                            }
+                        });
                     }
                 }
             }
@@ -919,11 +1059,30 @@ impl AmzWindow {
             #[weak(rename_to = win)]
             self,
             move |_| {
-                let note_id = win.imp().manager.borrow().as_ref()
+                let imp = win.imp();
+                let note_id = imp.manager.borrow().as_ref()
                     .and_then(|m| m.borrow().selected_note_id.clone());
-                if let Some(id) = note_id {
-                    if let Some(mgr) = win.imp().manager.borrow().clone() {
-                        mgr.borrow_mut().delete_note(&id);
+                let Some(id) = note_id else { return };
+
+                let in_trash = imp.manager.borrow().as_ref()
+                    .and_then(|m| {
+                        let m = m.borrow();
+                        (0..m.note_store.n_items()).find_map(|i| {
+                            m.note_store.item(i).and_downcast::<AmzNote>()
+                                .filter(|n| n.id() == id)
+                                .map(|n| n.folder_id() == WASTEBASKET_ID)
+                        })
+                    })
+                    .unwrap_or(false);
+
+                if in_trash {
+                    win.prompt_permanent_delete(&id);
+                } else {
+                    if let Some(mgr) = imp.manager.borrow().clone() {
+                        mgr.borrow_mut().trash_note(&id);
+                    }
+                    if let Some(f) = imp.note_filter.borrow().as_ref() {
+                        f.changed(gtk::FilterChange::Different);
                     }
                     win.clear_editor();
                 }
@@ -931,10 +1090,52 @@ impl AmzWindow {
         ));
 
         imp.new_folder_button.connect_clicked(glib::clone!(
+            #[weak]
+            imp,
+            move |_| {
+                imp.new_folder_entry.set_text("");
+                imp.new_folder_revealer.set_reveal_child(true);
+                imp.new_folder_entry.grab_focus();
+            }
+        ));
+
+        // Enter → create folder and hide revealer.
+        imp.new_folder_entry.connect_activate(glib::clone!(
             #[weak(rename_to = win)]
             self,
-            move |_| win.prompt_new_folder()
+            move |entry| {
+                let name = entry.text().to_string();
+                let imp = win.imp();
+                imp.new_folder_revealer.set_reveal_child(false);
+                entry.set_text("");
+                if !name.is_empty() {
+                    if let Some(mgr) = imp.manager.borrow().clone() {
+                        mgr.borrow_mut().create_folder(name);
+                    }
+                }
+            }
         ));
+
+        // Escape → cancel without creating.
+        {
+            let key_ctrl = gtk::EventControllerKey::new();
+            key_ctrl.connect_key_pressed(glib::clone!(
+                #[weak]
+                imp,
+                #[upgrade_or]
+                glib::Propagation::Proceed,
+                move |_, key, _, _| {
+                    if key == gdk::Key::Escape {
+                        imp.new_folder_revealer.set_reveal_child(false);
+                        imp.new_folder_entry.set_text("");
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
+                    }
+                }
+            ));
+            imp.new_folder_entry.add_controller(key_ctrl);
+        }
 
         // Set up markdown text-tags once, on the initial buffer.
         md_formatter::setup_tags(&imp.text_view.buffer());
@@ -952,6 +1153,56 @@ impl AmzWindow {
                 glib::Propagation::Proceed
             });
             imp.text_view.add_controller(key_ctrl);
+        }
+
+        // ── Image drag-and-drop ───────────────────────────────────────────
+        {
+            let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+            drop.connect_drop(glib::clone!(
+                #[weak(rename_to = win)]
+                self,
+                #[upgrade_or]
+                false,
+                move |_, value, _, _| {
+                    let Ok(file_list) = value.get::<gdk::FileList>() else { return false };
+                    let note_id = win.imp().manager.borrow()
+                        .as_ref()
+                        .and_then(|m| m.borrow().selected_note_id.clone());
+                    let Some(note_id) = note_id else { return false };
+                    let buf = win.imp().text_view.buffer();
+                    let mut handled = false;
+                    for file in file_list.files() {
+                        let Some(path) = file.path() else { continue };
+                        if !md_formatter::is_image_file(&path) { continue }
+                        let Some(uri) = md_formatter::copy_image_to_note(&note_id, &path) else { continue };
+                        let alt = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+                        buf.insert_at_cursor(&format!("\n![{}]({})\n", alt, uri));
+                        handled = true;
+                    }
+                    handled
+                }
+            ));
+            imp.text_view.add_controller(drop);
+        }
+
+        // ── Image paste (Ctrl+V with image files in clipboard) ────────────
+        {
+            let paste_ctrl = gtk::EventControllerKey::new();
+            paste_ctrl.connect_key_pressed(glib::clone!(
+                #[weak(rename_to = win)]
+                self,
+                #[upgrade_or]
+                glib::Propagation::Proceed,
+                move |_, key, _, mods| {
+                    if key == gdk::Key::v && mods.contains(gdk::ModifierType::CONTROL_MASK) {
+                        if win.handle_image_paste() {
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                    glib::Propagation::Proceed
+                }
+            ));
+            imp.text_view.add_controller(paste_ctrl);
         }
 
         imp.text_view.buffer().connect_changed(glib::clone!(
@@ -972,9 +1223,27 @@ impl AmzWindow {
         ));
 
         imp.search_button.connect_toggled(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |btn| {
+                let imp = win.imp();
+                if btn.is_active() {
+                    imp.search_stack.set_visible_child_name("search");
+                    imp.search_entry.grab_focus();
+                } else {
+                    imp.search_stack.set_visible_child_name("empty");
+                    imp.search_entry.set_text("");
+                    *imp.note_filter_search.borrow_mut() = String::new();
+                    if let Some(f) = imp.note_filter.borrow().as_ref() {
+                        f.changed(gtk::FilterChange::Different);
+                    }
+                }
+            }
+        ));
+        imp.search_entry.connect_stop_search(glib::clone!(
             #[weak]
             imp,
-            move |btn| imp.search_bar.set_search_mode(btn.is_active())
+            move |_| imp.search_button.set_active(false)
         ));
         imp.search_entry.connect_search_changed(glib::clone!(
             #[weak(rename_to = win)]

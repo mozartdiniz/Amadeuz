@@ -57,7 +57,7 @@ impl AmzNoteRow {
         imp.date_label.set_text(&format_timestamp(note.updated_at()));
 
         let content = note.content();
-        let preview: String = content.chars().take(80).collect();
+        let preview: String = content.trim_start().chars().take(80).collect();
         let preview = preview.replace('\n', " ");
         imp.preview_label.set_text(&preview);
 
