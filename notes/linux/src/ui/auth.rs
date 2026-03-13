@@ -24,6 +24,12 @@ mod imp {
         #[template_child] pub recover_password: TemplateChild<adw::PasswordEntryRow>,
         #[template_child] pub recover_button:   TemplateChild<gtk::Button>,
 
+        // Navigation
+        #[template_child] pub switch_to_register_button:             TemplateChild<gtk::Button>,
+        #[template_child] pub switch_to_recover_button:              TemplateChild<gtk::Button>,
+        #[template_child] pub switch_to_login_from_register_button:  TemplateChild<gtk::Button>,
+        #[template_child] pub switch_to_login_from_recover_button:   TemplateChild<gtk::Button>,
+
         // Shared
         #[template_child] pub auth_stack:     TemplateChild<gtk::Stack>,
         #[template_child] pub error_label:    TemplateChild<gtk::Label>,
@@ -45,7 +51,53 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for AmzAuthView {}
+    impl ObjectImpl for AmzAuthView {
+        fn constructed(&self) {
+            self.parent_constructed();
+
+            self.switch_to_register_button.connect_clicked(glib::clone!(
+                #[weak(rename_to = imp)] self,
+                move |_| {
+                    imp.error_label.set_visible(false);
+                    imp.auth_stack.set_visible_child_name("register");
+                }
+            ));
+            self.switch_to_recover_button.connect_clicked(glib::clone!(
+                #[weak(rename_to = imp)] self,
+                move |_| {
+                    imp.error_label.set_visible(false);
+                    imp.auth_stack.set_visible_child_name("recover");
+                }
+            ));
+            self.switch_to_login_from_register_button.connect_clicked(glib::clone!(
+                #[weak(rename_to = imp)] self,
+                move |_| {
+                    imp.error_label.set_visible(false);
+                    imp.auth_stack.set_visible_child_name("login");
+                }
+            ));
+            self.switch_to_login_from_recover_button.connect_clicked(glib::clone!(
+                #[weak(rename_to = imp)] self,
+                move |_| {
+                    imp.error_label.set_visible(false);
+                    imp.auth_stack.set_visible_child_name("login");
+                }
+            ));
+
+            // Re-enable all action buttons whenever the page changes, so that
+            // a set_sensitive_all(false) from a previous page's in-flight request
+            // doesn't leave the new page's button greyed out.
+            self.auth_stack.connect_visible_child_notify(glib::clone!(
+                #[weak(rename_to = imp)] self,
+                move |_| {
+                    imp.login_button.set_sensitive(true);
+                    imp.register_button.set_sensitive(true);
+                    imp.recover_button.set_sensitive(true);
+                    imp.error_label.set_visible(false);
+                }
+            ));
+        }
+    }
     impl WidgetImpl for AmzAuthView {}
     impl BinImpl for AmzAuthView {}
 }

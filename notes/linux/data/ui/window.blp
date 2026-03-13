@@ -12,10 +12,83 @@ template $AmzWindow : Adw.ApplicationWindow {
     transition-type: crossfade;
     transition-duration: 200;
 
+    // ── Welcome page ──────────────────────────────────────────────────────
+    Gtk.StackPage {
+      name: "welcome";
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar {
+          show-back-button: false;
+        }
+
+        Adw.StatusPage {
+          vexpand: true;
+          icon-name: "document-edit-symbolic";
+          title: _("Amadeuz Notes");
+          description: _("Your self-hosted, privacy-first notes.");
+
+          child: Adw.Clamp {
+            maximum-size: 400;
+
+            Gtk.Box {
+              orientation: vertical;
+              spacing: 24;
+
+              Adw.PreferencesGroup {
+                Adw.ActionRow offline_row {
+                  title: _("Use Offline");
+                  subtitle: _("All features, notes saved on this machine only. No account needed.");
+                  activatable: true;
+
+                  [suffix]
+                  Gtk.Image {
+                    icon-name: "go-next-symbolic";
+                    styles ["dim-label"]
+                  }
+                }
+
+                Adw.ActionRow connect_row {
+                  title: _("Connect to Server");
+                  subtitle: _("Sync notes across your devices using your own server.");
+                  activatable: true;
+
+                  [suffix]
+                  Gtk.Image {
+                    icon-name: "go-next-symbolic";
+                    styles ["dim-label"]
+                  }
+                }
+              }
+
+              Gtk.Button quit_welcome_button {
+                label: _("Quit");
+                halign: center;
+                styles ["flat"]
+              }
+            }
+          };
+        }
+      };
+    }
+
     // ── Auth page ─────────────────────────────────────────────────────────
     Gtk.StackPage {
       name: "auth";
-      child: $AmzAuthView auth_view {};
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar {
+          show-back-button: false;
+
+          [start]
+          Gtk.Button auth_back_button {
+            icon-name: "go-previous-symbolic";
+            tooltip-text: _("Back");
+            styles ["flat"]
+          }
+        }
+
+        $AmzAuthView auth_view {}
+      };
     }
 
     // ── Main page: 3-column layout ────────────────────────────────────────
@@ -50,7 +123,6 @@ template $AmzWindow : Adw.ApplicationWindow {
               icon-name: "open-menu-symbolic";
               tooltip-text: _("Main Menu");
               primary: true;
-              menu-model: main_menu;
             }
           }
 
@@ -252,21 +324,3 @@ template $AmzWindow : Adw.ApplicationWindow {
   };
 }
 
-menu main_menu {
-  section {
-    item {
-      label: _("_Server Settings");
-      action: "win.show-preferences";
-    }
-    item {
-      label: _("_Sign Out");
-      action: "win.sign-out";
-    }
-  }
-  section {
-    item {
-      label: _("_About Amadeuz Notes");
-      action: "win.show-about";
-    }
-  }
-}

@@ -49,6 +49,7 @@ pub struct NotesManager {
 
     pub is_authenticated: bool,
     pub is_connected: bool,
+    pub offline_mode: bool,
     pub selected_folder_id: Option<String>,
     pub selected_note_id: Option<String>,
 
@@ -79,6 +80,7 @@ impl NotesManager {
             note_store: gio::ListStore::new::<AmzNote>(),
             is_authenticated: false,
             is_connected: false,
+            offline_mode: false,
             selected_folder_id: None,
             selected_note_id: None,
             event_tx: tx,
@@ -146,6 +148,7 @@ impl NotesManager {
         self.note_sync = None;
         self.is_authenticated = false;
         self.is_connected = false;
+        self.offline_mode = false;
         self.api.token = None;
         self.selected_folder_id = None;
         self.selected_note_id = None;
@@ -276,11 +279,16 @@ impl NotesManager {
         notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         self.note_store.remove_all();
         for n in &notes {
+            let folder_id = if n.deleted_at.is_some() {
+                WASTEBASKET_ID
+            } else {
+                n.folder_id.as_deref().unwrap_or("")
+            };
             self.note_store.append(&AmzNote::new(
                 &n.id,
                 &n.title,
                 &n.content,
-                n.folder_id.as_deref().unwrap_or(""),
+                folder_id,
                 n.updated_at,
                 n.created_at,
             ));
@@ -356,6 +364,7 @@ impl NotesManager {
             title: String::new(),
             content: String::new(),
             folder_id: if fid.is_empty() { None } else { Some(fid) },
+            deleted_at: None,
             updated_at: now,
             created_at: now,
         };
@@ -367,12 +376,30 @@ impl NotesManager {
 
     /// Move a note to the wastebasket (soft delete).
     pub fn trash_note(&mut self, id: &str) {
-        self.move_note(id, Some(WASTEBASKET_ID.to_string()));
+        if let Some(note) = self.find_note(id) {
+            note.set_folder_id(WASTEBASKET_ID.to_string());
+            note.set_updated_at(now_ms());
+        }
+        self.persist();
+        let api = self.api.clone();
+        let id = id.to_owned();
+        crate::spawn(async move {
+            api.trash_note(&id).await.ok();
+        });
     }
 
     /// Move a note out of the wastebasket back to "No Folder".
     pub fn restore_note(&mut self, id: &str) {
-        self.move_note(id, None);
+        if let Some(note) = self.find_note(id) {
+            note.set_folder_id(String::new());
+            note.set_updated_at(now_ms());
+        }
+        self.persist();
+        let api = self.api.clone();
+        let id = id.to_owned();
+        crate::spawn(async move {
+            api.restore_note(&id).await.ok();
+        });
     }
 
     pub fn delete_note(&mut self, id: &str) {
@@ -537,16 +564,25 @@ impl NotesManager {
             .filter(|n| server_nmap.get(n.id.as_str()).is_none())
             .cloned()
             .collect();
-        let newer_local_notes: Vec<NoteRecord> = local
+
+        // For notes the server knows about, push any state changes made offline.
+        // Three categories: content update, trash (deleted_at added), restore (deleted_at removed).
+        struct NoteSync {
+            record: NoteRecord,
+            server_deleted_at: Option<i64>,
+        }
+        let newer_local: Vec<NoteSync> = local
             .notes
             .iter()
-            .filter(|n| {
-                server_nmap
-                    .get(n.id.as_str())
-                    .map(|sn| n.updated_at > sn.updated_at)
-                    .unwrap_or(false)
+            .filter_map(|n| {
+                server_nmap.get(n.id.as_str()).and_then(|sn| {
+                    if n.updated_at > sn.updated_at {
+                        Some(NoteSync { record: n.clone(), server_deleted_at: sn.deleted_at })
+                    } else {
+                        None
+                    }
+                })
             })
-            .cloned()
             .collect();
 
         crate::spawn(async move {
@@ -556,10 +592,20 @@ impl NotesManager {
             for n in local_only_notes {
                 api.create_note(&n).await.ok();
             }
-            for n in newer_local_notes {
-                api.update_note(&n.id, &n.title, &n.content, n.updated_at)
-                    .await
-                    .ok();
+            for ns in newer_local {
+                let n = &ns.record;
+                let now_trashed = n.deleted_at.is_some();
+                let was_trashed = ns.server_deleted_at.is_some();
+                if now_trashed && !was_trashed {
+                    api.trash_note(&n.id).await.ok();
+                } else if !now_trashed && was_trashed {
+                    api.restore_note(&n.id).await.ok();
+                } else if !now_trashed {
+                    // Regular content update (not a trash/restore operation).
+                    api.update_note(&n.id, &n.title, &n.content, n.updated_at)
+                        .await
+                        .ok();
+                }
             }
         });
 
@@ -573,18 +619,25 @@ impl NotesManager {
         merged_notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         self.note_store.remove_all();
         for n in &merged_notes {
+            let folder_id = if n.deleted_at.is_some() {
+                WASTEBASKET_ID
+            } else {
+                n.folder_id.as_deref().unwrap_or("")
+            };
             self.note_store.append(&AmzNote::new(
                 &n.id,
                 &n.title,
                 &n.content,
-                n.folder_id.as_deref().unwrap_or(""),
+                folder_id,
                 n.updated_at,
                 n.created_at,
             ));
         }
 
-        // Persist merged result.
+        // Persist merged result (preserve offline_mode flag).
+        let offline_mode = self.offline_mode;
         local_store::save(&local_store::LocalData {
+            offline_mode,
             folders: merged_folders,
             notes: merged_notes,
         })
@@ -669,21 +722,24 @@ impl NotesManager {
                 self.note_store
                     .item(i)
                     .and_downcast::<AmzNote>()
-                    .map(|n| NoteRecord {
-                        id: n.id(),
-                        title: n.title(),
-                        content: n.content(),
-                        folder_id: {
-                            let fid = n.folder_id();
-                            if fid.is_empty() { None } else { Some(fid) }
-                        },
-                        updated_at: n.updated_at(),
-                        created_at: n.created_at(),
+                    .map(|n| {
+                        let fid = n.folder_id();
+                        let in_trash = fid == WASTEBASKET_ID;
+                        NoteRecord {
+                            id: n.id(),
+                            title: n.title(),
+                            content: n.content(),
+                            folder_id: if fid.is_empty() || in_trash { None } else { Some(fid) },
+                            deleted_at: if in_trash { Some(n.updated_at()) } else { None },
+                            updated_at: n.updated_at(),
+                            created_at: n.created_at(),
+                        }
                     })
             })
             .collect();
 
-        local_store::save(&local_store::LocalData { folders, notes }).ok();
+        let offline_mode = self.offline_mode;
+        local_store::save(&local_store::LocalData { offline_mode, folders, notes }).ok();
     }
 }
 

@@ -81,6 +81,8 @@ func main() {
 		r.Post("/notes", notesHandler.Create)
 		r.Patch("/notes/{id}", notesHandler.Update)
 		r.Patch("/notes/{id}/move", notesHandler.Move)
+		r.Patch("/notes/{id}/trash", notesHandler.Trash)
+		r.Patch("/notes/{id}/restore", notesHandler.Restore)
 		r.Delete("/notes/{id}", notesHandler.Delete)
 
 		r.Put("/blobs/{id}", blobsHandler.Upload)

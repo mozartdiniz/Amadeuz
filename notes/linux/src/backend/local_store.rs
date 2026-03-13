@@ -4,6 +4,11 @@ use std::path::PathBuf;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LocalData {
+    /// True when the user chose "Use Offline" on the welcome screen.
+    /// The app skips the welcome screen on subsequent launches and never
+    /// attempts to authenticate or sync.
+    #[serde(default)]
+    pub offline_mode: bool,
     pub folders: Vec<FolderRecord>,
     pub notes: Vec<NoteRecord>,
 }
@@ -23,6 +28,8 @@ pub struct NoteRecord {
     pub folder_id: Option<String>,
     pub updated_at: i64,
     pub created_at: i64,
+    #[serde(default)]
+    pub deleted_at: Option<i64>,
 }
 
 fn data_path() -> PathBuf {

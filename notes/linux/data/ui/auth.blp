@@ -36,88 +36,120 @@ template $AmzAuthView : Adw.Bin {
           }
         }
 
-        // Tab switcher
-        Gtk.StackSwitcher {
-          stack: auth_stack;
-          halign: center;
-        }
-
         Gtk.Stack auth_stack {
           transition-type: crossfade;
 
-          // ── Login ────────────────────────────────────────────────────────
-          Gtk.Box {
+          // ── Login ──────────────────────────────────────────────────────
+          Gtk.StackPage {
             name: "login";
-            orientation: vertical;
-            spacing: 12;
+            child: Gtk.Box {
+              orientation: vertical;
+              spacing: 12;
 
-            Adw.PreferencesGroup {
-              Adw.EntryRow login_email {
-                title: _("Email");
-                input-purpose: email;
-                input-hints: no_emoji | lowercase;
+              Adw.PreferencesGroup {
+                Adw.EntryRow login_email {
+                  title: _("Email");
+                  input-purpose: email;
+                  input-hints: no_emoji | lowercase;
+                }
+                Adw.PasswordEntryRow login_password {
+                  title: _("Password");
+                }
               }
-              Adw.PasswordEntryRow login_password {
-                title: _("Password");
-              }
-            }
 
-            Gtk.Button login_button {
-              label: _("Log In");
-              halign: fill;
-              styles ["suggested-action", "pill"]
-            }
+              Gtk.Button login_button {
+                label: _("Sign In");
+                halign: fill;
+                styles ["suggested-action", "pill"]
+              }
+
+              Gtk.Box {
+                halign: center;
+                spacing: 4;
+
+                Gtk.Button switch_to_register_button {
+                  label: _("Create account");
+                  styles ["flat"]
+                }
+
+                Gtk.Label {
+                  label: "·";
+                  styles ["dim-label"]
+                }
+
+                Gtk.Button switch_to_recover_button {
+                  label: _("Forgot your password?");
+                  styles ["flat"]
+                }
+              }
+            };
           }
 
-          // ── Register ─────────────────────────────────────────────────────
-          Gtk.Box {
+          // ── Register ───────────────────────────────────────────────────
+          Gtk.StackPage {
             name: "register";
-            orientation: vertical;
-            spacing: 12;
+            child: Gtk.Box {
+              orientation: vertical;
+              spacing: 12;
 
-            Adw.PreferencesGroup {
-              Adw.EntryRow register_email {
-                title: _("Email");
-                input-purpose: email;
-                input-hints: no_emoji | lowercase;
+              Adw.PreferencesGroup {
+                Adw.EntryRow register_email {
+                  title: _("Email");
+                  input-purpose: email;
+                  input-hints: no_emoji | lowercase;
+                }
+                Adw.PasswordEntryRow register_password {
+                  title: _("Password");
+                }
               }
-              Adw.PasswordEntryRow register_password {
-                title: _("Password");
-              }
-            }
 
-            Gtk.Button register_button {
-              label: _("Create Account");
-              halign: fill;
-              styles ["suggested-action", "pill"]
-            }
+              Gtk.Button register_button {
+                label: _("Create Account");
+                halign: fill;
+                styles ["suggested-action", "pill"]
+              }
+
+              Gtk.Button switch_to_login_from_register_button {
+                label: _("Already have an account? Sign in");
+                halign: center;
+                styles ["flat"]
+              }
+            };
           }
 
-          // ── Recover ──────────────────────────────────────────────────────
-          Gtk.Box {
+          // ── Recover ────────────────────────────────────────────────────
+          Gtk.StackPage {
             name: "recover";
-            orientation: vertical;
-            spacing: 12;
+            child: Gtk.Box {
+              orientation: vertical;
+              spacing: 12;
 
-            Adw.PreferencesGroup {
-              Adw.EntryRow recover_email {
-                title: _("Email");
-                input-purpose: email;
-                input-hints: no_emoji | lowercase;
+              Adw.PreferencesGroup {
+                Adw.EntryRow recover_email {
+                  title: _("Email");
+                  input-purpose: email;
+                  input-hints: no_emoji | lowercase;
+                }
+                Adw.EntryRow recover_code {
+                  title: _("Recovery Code");
+                }
+                Adw.PasswordEntryRow recover_password {
+                  title: _("New Password");
+                }
               }
-              Adw.EntryRow recover_code {
-                title: _("Recovery Code");
-              }
-              Adw.PasswordEntryRow recover_password {
-                title: _("New Password");
-              }
-            }
 
-            Gtk.Button recover_button {
-              label: _("Recover Account");
-              halign: fill;
-              styles ["suggested-action", "pill"]
-            }
+              Gtk.Button recover_button {
+                label: _("Recover Account");
+                halign: fill;
+                styles ["suggested-action", "pill"]
+              }
+
+              Gtk.Button switch_to_login_from_recover_button {
+                label: _("Back to sign in");
+                halign: center;
+                styles ["flat"]
+              }
+            };
           }
         }
 

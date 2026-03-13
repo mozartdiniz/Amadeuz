@@ -17,12 +17,13 @@ import (
 const maxNoteBodyBytes = 10 << 20 // 10 MB
 
 type Note struct {
-	ID        string `json:"id"`
-	FolderID  string `json:"folder_id"`
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	UpdatedAt int64  `json:"updated_at"`
-	CreatedAt int64  `json:"created_at"`
+	ID        string  `json:"id"`
+	FolderID  string  `json:"folder_id"`
+	Title     string  `json:"title"`
+	Content   string  `json:"content"`
+	UpdatedAt int64   `json:"updated_at"`
+	CreatedAt int64   `json:"created_at"`
+	DeletedAt *int64  `json:"deleted_at,omitempty"`
 }
 
 type Handler struct {
@@ -35,11 +36,12 @@ func NewHandler(database *db.DB) *Handler {
 }
 
 // List handles GET /notes
-// Returns all notes for the authenticated user (including content).
+// Returns all notes for the authenticated user, including soft-deleted ones.
+// Clients use the deleted_at field to place notes in the wastebasket.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserID(r)
 	rows, err := h.db.Query(
-		`SELECT id, COALESCE(folder_id, ''), title, content, updated_at, created_at
+		`SELECT id, COALESCE(folder_id, ''), title, content, updated_at, created_at, deleted_at
 		 FROM notes WHERE user_id = ? ORDER BY updated_at DESC`,
 		userID,
 	)
@@ -52,7 +54,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	notes := []Note{}
 	for rows.Next() {
 		var n Note
-		if err := rows.Scan(&n.ID, &n.FolderID, &n.Title, &n.Content, &n.UpdatedAt, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.FolderID, &n.Title, &n.Content, &n.UpdatedAt, &n.CreatedAt, &n.DeletedAt); err != nil {
 			http.Error(w, "db error", http.StatusInternalServerError)
 			return
 		}
@@ -166,8 +168,8 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
 	var n Note
 	if err := h.db.QueryRow(
-		`SELECT id, COALESCE(folder_id, ''), title, content, updated_at, created_at FROM notes WHERE id = ?`, id,
-	).Scan(&n.ID, &n.FolderID, &n.Title, &n.Content, &n.UpdatedAt, &n.CreatedAt); err != nil {
+		`SELECT id, COALESCE(folder_id, ''), title, content, updated_at, created_at, deleted_at FROM notes WHERE id = ?`, id,
+	).Scan(&n.ID, &n.FolderID, &n.Title, &n.Content, &n.UpdatedAt, &n.CreatedAt, &n.DeletedAt); err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
 	}
@@ -208,14 +210,60 @@ func (h *Handler) Move(w http.ResponseWriter, r *http.Request) {
 
 	var n Note
 	if err := h.db.QueryRow(
-		`SELECT id, COALESCE(folder_id, ''), title, content, updated_at, created_at FROM notes WHERE id = ?`, id,
-	).Scan(&n.ID, &n.FolderID, &n.Title, &n.Content, &n.UpdatedAt, &n.CreatedAt); err != nil {
+		`SELECT id, COALESCE(folder_id, ''), title, content, updated_at, created_at, deleted_at FROM notes WHERE id = ?`, id,
+	).Scan(&n.ID, &n.FolderID, &n.Title, &n.Content, &n.UpdatedAt, &n.CreatedAt, &n.DeletedAt); err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"note": n})
+}
+
+// Trash handles PATCH /notes/:id/trash
+// Soft-deletes the note by setting deleted_at. Idempotent.
+func (h *Handler) Trash(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserID(r)
+	id := chi.URLParam(r, "id")
+	now := time.Now().UnixMilli()
+
+	res, err := h.db.Exec(
+		`UPDATE notes SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+		now, now, id, userID,
+	)
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Restore handles PATCH /notes/:id/restore
+// Clears deleted_at, moving the note out of the wastebasket. Idempotent.
+func (h *Handler) Restore(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserID(r)
+	id := chi.URLParam(r, "id")
+	now := time.Now().UnixMilli()
+
+	res, err := h.db.Exec(
+		`UPDATE notes SET deleted_at = NULL, updated_at = ? WHERE id = ? AND user_id = ?`,
+		now, id, userID,
+	)
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Delete handles DELETE /notes/:id

@@ -200,6 +200,14 @@ impl ApiClient {
         Ok(r.note)
     }
 
+    pub async fn trash_note(&self, id: &str) -> Result<(), ApiError> {
+        self.patch_empty(&format!("/notes/{id}/trash")).await
+    }
+
+    pub async fn restore_note(&self, id: &str) -> Result<(), ApiError> {
+        self.patch_empty(&format!("/notes/{id}/restore")).await
+    }
+
     pub async fn delete_note(&self, id: &str) -> Result<(), ApiError> {
         self.delete(&format!("/notes/{id}")).await
     }
@@ -263,6 +271,24 @@ impl ApiClient {
         }
         let resp = req.send().await?;
         self.parse(resp).await
+    }
+
+    /// PATCH that expects 204 No Content (no response body).
+    async fn patch_empty(&self, path: &str) -> Result<(), ApiError> {
+        let mut req = self
+            .http
+            .patch(format!("{}{}", self.base_url, path))
+            .header("Content-Length", "0");
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+        let resp = req.send().await?;
+        match resp.status() {
+            s if s.is_success() => Ok(()),
+            StatusCode::UNAUTHORIZED => Err(ApiError::Unauthorized),
+            StatusCode::NOT_FOUND => Err(ApiError::NotFound),
+            s => Err(ApiError::Server(s.as_u16())),
+        }
     }
 
     async fn delete(&self, path: &str) -> Result<(), ApiError> {

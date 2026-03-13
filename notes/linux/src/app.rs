@@ -49,15 +49,18 @@ mod imp {
                 .block_on(async { crate::backend::keyring::load_token().await.ok().flatten() });
 
             let is_authenticated = saved_token.is_some();
+            let local_data = crate::backend::local_store::load();
+            let offline_mode = !is_authenticated && local_data.offline_mode;
 
             // Create manager + event channel.
             let (mgr, rx) = NotesManager::new(server_url, saved_token);
             {
                 let mut m = mgr.borrow_mut();
                 m.is_authenticated = is_authenticated;
+                m.offline_mode = offline_mode;
                 // Populate stores from disk immediately so the UI is usable
                 // before the first sync completes (or if the server is offline).
-                if is_authenticated {
+                if is_authenticated || offline_mode {
                     m.load_local();
                 }
             }

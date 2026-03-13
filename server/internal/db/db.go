@@ -68,12 +68,12 @@ func NewID() string {
 }
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(`
+	// Initial schema (idempotent).
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS config (
 			key   TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		);
-
 		CREATE TABLE IF NOT EXISTS users (
 			id                 TEXT PRIMARY KEY,
 			email              TEXT UNIQUE NOT NULL,
@@ -81,14 +81,12 @@ func migrate(db *sql.DB) error {
 			recovery_code_hash TEXT NOT NULL,
 			created_at         INTEGER NOT NULL
 		);
-
 		CREATE TABLE IF NOT EXISTS folders (
 			id         TEXT PRIMARY KEY,
 			user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			name       TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		);
-
 		CREATE TABLE IF NOT EXISTS notes (
 			id         TEXT PRIMARY KEY,
 			user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -98,6 +96,22 @@ func migrate(db *sql.DB) error {
 			updated_at INTEGER NOT NULL,
 			created_at INTEGER NOT NULL
 		);
-	`)
-	return err
+	`); err != nil {
+		return err
+	}
+
+	// Migration: add deleted_at for soft delete / wastebasket support.
+	var count int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'deleted_at'`,
+	).Scan(&count); err != nil {
+		return fmt.Errorf("migrate check deleted_at: %w", err)
+	}
+	if count == 0 {
+		if _, err := db.Exec(`ALTER TABLE notes ADD COLUMN deleted_at INTEGER`); err != nil {
+			return fmt.Errorf("migrate add deleted_at: %w", err)
+		}
+	}
+
+	return nil
 }

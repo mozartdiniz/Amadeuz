@@ -19,11 +19,22 @@ mod imp {
     pub struct AmzWindow {
         // Stack
         #[template_child] pub main_stack: TemplateChild<gtk::Stack>,
-        #[template_child] pub auth_view:  TemplateChild<AmzAuthView>,
+
+        // Welcome page
+        #[template_child] pub offline_row:         TemplateChild<adw::ActionRow>,
+        #[template_child] pub connect_row:         TemplateChild<adw::ActionRow>,
+        #[template_child] pub quit_welcome_button: TemplateChild<gtk::Button>,
+
+        // Auth page
+        #[template_child] pub auth_view:       TemplateChild<AmzAuthView>,
+        #[template_child] pub auth_back_button: TemplateChild<gtk::Button>,
 
         // Main layout
         #[template_child] pub outer_split: TemplateChild<adw::NavigationSplitView>,
         #[template_child] pub inner_split: TemplateChild<adw::NavigationSplitView>,
+
+        // Toolbar
+        #[template_child] pub menu_button: TemplateChild<gtk::MenuButton>,
 
         // Folders
         #[template_child] pub all_notes_list:       TemplateChild<gtk::ListBox>,
@@ -354,14 +365,34 @@ impl AmzWindow {
         let imp = self.imp();
         let Some(mgr) = imp.manager.borrow().clone() else { return };
 
-        let (is_authenticated, is_connected, selected_note_id) = {
+        let (is_authenticated, is_connected, offline_mode, selected_note_id) = {
             let m = mgr.borrow();
-            (m.is_authenticated, m.is_connected, m.selected_note_id.clone())
+            (m.is_authenticated, m.is_connected, m.offline_mode, m.selected_note_id.clone())
         };
 
-        if is_authenticated {
+        // Rebuild menu to reflect current mode.
+        {
+            let section1 = gio::Menu::new();
+            if offline_mode {
+                section1.append(Some("_Return to Start"), Some("win.sign-out"));
+            } else {
+                section1.append(Some("_Server Settings"), Some("win.show-preferences"));
+                section1.append(Some("_Sign Out"), Some("win.sign-out"));
+            }
+            let section2 = gio::Menu::new();
+            section2.append(Some("_About Amadeuz Notes"), Some("win.show-about"));
+            let menu = gio::Menu::new();
+            menu.append_section(None, &section1);
+            menu.append_section(None, &section2);
+            imp.menu_button.set_menu_model(Some(&menu));
+        }
+
+        if is_authenticated || offline_mode {
             imp.main_stack.set_visible_child_name("main");
-            if is_connected {
+            if offline_mode {
+                imp.status_icon.set_icon_name(Some("computer-symbolic"));
+                imp.status_label.set_text("Offline Mode");
+            } else if is_connected {
                 imp.status_icon.set_icon_name(Some("network-transmit-receive-symbolic"));
                 imp.status_label.set_text("Synced");
             } else {
@@ -384,8 +415,44 @@ impl AmzWindow {
                 }
             }
         } else {
-            imp.main_stack.set_visible_child_name("auth");
+            // After sign-out or on first launch without a token, go to the
+            // welcome page — not directly to auth.  Only stay on auth if the
+            // user already navigated there (i.e. the stack was set to "auth"
+            // by on_connect_to_server and we haven't left yet).
+            let current = imp.main_stack.visible_child_name();
+            if current.as_deref() != Some("auth") {
+                imp.main_stack.set_visible_child_name("welcome");
+            }
         }
+    }
+
+    // ── Welcome page callbacks ────────────────────────────────────────────────
+
+    fn use_offline(&self) {
+        let imp = self.imp();
+        if let Some(mgr) = imp.manager.borrow().clone() {
+            let mut m = mgr.borrow_mut();
+            m.offline_mode = true;
+            m.load_local();
+        }
+        // Persist the choice so the welcome screen is skipped next launch.
+        let mut data = crate::backend::local_store::load();
+        data.offline_mode = true;
+        crate::backend::local_store::save(&data).ok();
+
+        self.refresh_ui();
+    }
+
+    fn on_connect_to_server(&self) {
+        let imp = self.imp();
+        imp.auth_view.imp().auth_stack.set_visible_child_name("login");
+        imp.auth_view.clear_error();
+        imp.main_stack.set_visible_child_name("auth");
+    }
+
+    fn back_to_welcome(&self) {
+        self.imp().auth_view.clear_error();
+        self.imp().main_stack.set_visible_child_name("welcome");
     }
 
     // ── Auth callbacks ────────────────────────────────────────────────────────
@@ -822,6 +889,28 @@ impl AmzWindow {
     }
 
     fn sign_out(&self) {
+        let offline_mode = self.imp().manager.borrow()
+            .as_ref()
+            .map(|m| m.borrow().offline_mode)
+            .unwrap_or(false);
+
+        if offline_mode {
+            // Offline mode: just clear the flag and return to the welcome screen.
+            // No data loss, so no confirmation dialog needed.
+            if let Some(mgr) = self.imp().manager.borrow().clone() {
+                let mut m = mgr.borrow_mut();
+                m.offline_mode = false;
+                m.folder_store.remove_all();
+                m.note_store.remove_all();
+            }
+            let mut data = crate::backend::local_store::load();
+            data.offline_mode = false;
+            crate::backend::local_store::save(&data).ok();
+            self.clear_editor();
+            self.refresh_ui();
+            return;
+        }
+
         let dialog = adw::AlertDialog::new(
             Some("Sign Out?"),
             Some("Your local notes will be cleared."),
@@ -896,34 +985,61 @@ impl AmzWindow {
     fn handle_image_paste(&self) -> bool {
         use gtk::prelude::WidgetExt;
         let clipboard = WidgetExt::display(self).clipboard();
-        if !clipboard.formats().contains_type(gdk::FileList::static_type()) {
-            return false;
-        }
+        let formats = clipboard.formats();
+
         let note_id = self.imp().manager.borrow()
             .as_ref()
             .and_then(|m| m.borrow().selected_note_id.clone());
         let Some(note_id) = note_id else { return false };
 
-        let win_weak = self.downgrade();
-        clipboard.read_value_async(
-            gdk::FileList::static_type(),
-            glib::Priority::DEFAULT,
-            gio::Cancellable::NONE,
-            move |result: Result<glib::Value, glib::Error>| {
-                let Ok(value) = result else { return };
-                let Ok(file_list) = value.get::<gdk::FileList>() else { return };
-                let Some(win) = win_weak.upgrade() else { return };
-                let buf = win.imp().text_view.buffer();
-                for file in file_list.files() {
-                    let Some(path) = file.path() else { continue };
-                    if !md_formatter::is_image_file(&path) { continue }
-                    let Some(uri) = md_formatter::copy_image_to_note(&note_id, &path) else { continue };
-                    let alt = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
-                    buf.insert_at_cursor(&format!("\n![{}]({})\n", alt, uri));
-                }
-            },
-        );
-        true
+        // ── Case 1: file(s) copied from file manager ──────────────────────
+        if formats.contains_type(gdk::FileList::static_type()) {
+            let win_weak = self.downgrade();
+            clipboard.read_value_async(
+                gdk::FileList::static_type(),
+                glib::Priority::DEFAULT,
+                gio::Cancellable::NONE,
+                move |result: Result<glib::Value, glib::Error>| {
+                    let Ok(value) = result else { return };
+                    let Ok(file_list) = value.get::<gdk::FileList>() else { return };
+                    let Some(win) = win_weak.upgrade() else { return };
+                    let buf = win.imp().text_view.buffer();
+                    for file in file_list.files() {
+                        let Some(path) = file.path() else { continue };
+                        if !md_formatter::is_image_file(&path) { continue }
+                        let Some(uri) = md_formatter::copy_image_to_note(&note_id, &path) else { continue };
+                        let alt = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+                        buf.insert_at_cursor(&format!("\n![{}]({})\n", alt, uri));
+                    }
+                },
+            );
+            return true;
+        }
+
+        // ── Case 2: raw image data (screenshot, copy from browser, etc.) ──
+        if formats.contains_type(gdk::Texture::static_type()) {
+            let win_weak = self.downgrade();
+            clipboard.read_texture_async(
+                gio::Cancellable::NONE,
+                move |result: Result<Option<gdk::Texture>, glib::Error>| {
+                    let Ok(Some(texture)) = result else { return };
+                    let Some(win) = win_weak.upgrade() else { return };
+                    let dir = md_formatter::image_store_dir(&note_id);
+                    if std::fs::create_dir_all(&dir).is_err() { return }
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0);
+                    let filename = format!("{}.png", ts);
+                    if texture.save_to_png(dir.join(&filename)).is_err() { return }
+                    let uri = format!("amz-image://{}", filename);
+                    win.imp().text_view.buffer().insert_at_cursor(&format!("\n![image]({})\n", uri));
+                },
+            );
+            return true;
+        }
+
+        false
     }
 
     // ── Image embedding ───────────────────────────────────────────────────────
@@ -975,6 +1091,28 @@ impl AmzWindow {
     fn setup_callbacks(&self) {
         let imp = self.imp();
         self.setup_auth_callbacks();
+
+        // ── Welcome page ──────────────────────────────────────────────────
+        imp.offline_row.connect_activated(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_| win.use_offline()
+        ));
+        imp.connect_row.connect_activated(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_| win.on_connect_to_server()
+        ));
+        imp.quit_welcome_button.connect_clicked(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_| win.close()
+        ));
+        imp.auth_back_button.connect_clicked(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_| win.back_to_welcome()
+        ));
 
         imp.all_notes_list.connect_row_activated(glib::clone!(
             #[weak(rename_to = win)]
