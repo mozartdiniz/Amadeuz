@@ -37,25 +37,25 @@
 | Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Create / delete notes | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Note list with title, date, preview | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Unfoldered notes (folder optional) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Create note from "All Notes" view | — | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Move note between folders | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Folder label in note list row | — | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Search / filter notes | — | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Inline images in notes | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Offline blob queue (insert images offline) | — | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ❌ | ✅ | ❌ | ❌ |
-| User accounts / JWT auth | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Register / Login / Recover | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Recovery codes | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
-| JWT in platform credential store | — | ✅ | ❌ | ✅ | ❌ | ❌ |
-| REST CRUD API | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Per-note WebSocket (live sync) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Sign Out | — | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Trash (soft delete / restore / delete permanently) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Unfoldered notes (folder optional) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Create note from "All Notes" view | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Move note between folders | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Folder label in note list row | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Search / filter notes | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Inline images in notes | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Offline blob queue (insert images offline) | — | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| User accounts / JWT auth | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Register / Login / Recover | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Recovery codes | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| JWT in platform credential store | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| REST CRUD API | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Per-note WebSocket (live sync) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Sign Out | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Trash (soft delete / restore / delete permanently) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
 | Offline mode (no account, persisted choice) | — | ❌ | ❌ | ✅ | ❌ | ❌ |
 | Welcome / onboarding screen | — | ❌ | ❌ | ✅ | ❌ | ❌ |
-| Image paste from clipboard (screenshots, web) | — | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Image paste from clipboard (screenshots, web) | — | ❌ | ❌ | ✅ | ✅ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
@@ -414,49 +414,82 @@ notes/linux/
 
 ## iOS (Swift + SwiftUI)
 
-**Status:** Phase 2b complete — folders + multiple notes, three-column layout, running on device
+**Status:** Full feature parity with macOS — rebuilt from scratch against the current server and mac client.
 **Location:** `notes/ios/`
-**Build:** Open `notes/ios/Notes.xcodeproj` in Xcode, select your device, press Run
+**Build:** `open notes/ios/Notes.xcodeproj` in Xcode → select device or simulator → Run
 **Requires:** Xcode + Apple Developer account (free tier works for personal device)
+**Old iOS code:** preserved in `legacy-code/ios/`
 
 ### What it does
-- `NavigationSplitView` three-column layout: folder sidebar | note list | note editor
-- Create/rename/delete folders (context menu on folder rows)
-- Create/delete notes (toolbar button + context menu)
-- Note list sorted by `updatedAt` descending, with title, date, and content preview
-- "All Notes" virtual view shows all notes across all folders
-- Full offline-first: loads `data.json` on startup, works without server
-- Debounce: 500ms after last change to title or content → save locally + push to server
-- Per-note last-write-wins merge on reconnect (push local if ahead)
-- Auto-reconnect every 3 seconds; green/red status dot in toolbar
-- Settings sheet for configurable server URL (stored in `UserDefaults`)
-- No `AppDelegate` activation hack — iOS apps are foreground by default
+
+- Login / Register / Recover screen (segmented control), same as macOS
+- Recovery code displayed in a sheet after register or recover — copy button uses `UIPasteboard`
+- **`NavigationSplitView` three-column layout**: folder sidebar | note list with date grouping | note editor
+- **Folder sidebar**: "All Notes", user folders, "Recently Deleted" — all with count badges. "New Folder" button pinned at bottom. Settings (⚙) icon in top-right of sidebar
+- **Note list**: sections "Today", "Previous 7 Days", "Previous 30 Days", "Older" — same date grouping as macOS
+- **Note rows**: bold title + (date + content preview) + folder label — same layout as macOS
+- **Note editor**: date stamp centered at top, UITextView-based markdown editor
+- **Trash**: right-click/long-press → "Move to Trash"; trash view shows Restore / Delete Permanently; "Empty Trash" toolbar button
+- **Inline images**: paste from `UIPasteboard` (e.g. screenshots) + PhotosPicker toolbar button (`photo.badge.plus`)
+- **Markdown styling**: headers, bullet lists, checkboxes — same visual rules as macOS; smart Enter list continuation
+- **Offline blob queue**: images saved locally first; uploaded to server on reconnect
+- All CRUD via REST; 500 ms debounced note changes via REST PATCH
+- Per-note WebSocket for live sync; auto-reconnect every 3 s
+- Full offline-first sync on login/reconnect (same merge logic as macOS)
+- JWT stored in iOS Keychain via Security framework
 
 ### Local storage
+
 `<App>/Library/Application Support/amadeuz/data.json`
 ```json
 { "folders": [...], "notes": [...] }
 ```
 
+Blob cache: `<App>/Library/Application Support/amadeuz/blobs/`
+Pending upload queue: `<App>/Library/Application Support/amadeuz/pending_blobs.json`
+
 ### Settings storage
-`UserDefaults` — key `"serverAddress"`
-Default server: `ws://localhost:8080/ws`
+
+`UserDefaults` — key `"serverAddress"`. Default: `http://localhost:8080`
+Settings sheet presented as a `NavigationStack`-wrapped `Form`.
 
 ### Key files
+
 | File | Role |
 |------|------|
-| `NoteApp.swift` | `@main` entry; clean — no AppDelegate hack needed on iOS |
-| `Models.swift` | `Folder`, `Note`, `WSMsg` — shared type definitions |
-| `ContentView.swift` | `NavigationSplitView` with `FolderSidebar`, `NoteList`, `NoteEditor`, `SettingsView` |
-| `NoteViewModel.swift` | `NotesViewModel` — state, selection, debounce, sync, CRUD |
-| `LocalStore.swift` | Read/write `data.json` in Application Support |
-| `SyncService.swift` | `URLSessionWebSocketTask` wrapper, auto-reconnect (shared logic with macOS) |
+| `NoteApp.swift` | `@main` entry — no AppDelegate needed on iOS |
+| `AuthView.swift` | Login / Register / Recover UI; `RecoveryCodeView` (uses `UIPasteboard`) |
+| `KeychainStore.swift` | Save, load, delete JWT from iOS Keychain (identical to macOS) |
+| `APIClient.swift` | All REST calls + WebSocket URL builder (identical to macOS) |
+| `Models.swift` | `Folder`, `Note`, `AuthResponse`, `NoteWsMsg` (identical to macOS) |
+| `ContentView.swift` | Auth gate; 3-column `NavigationSplitView`; `FolderSidebar`, `NoteList`, `NoteEditor`, `SettingsView` |
+| `NoteViewModel.swift` | `@MainActor NotesViewModel` — auth, `fullSync()`, CRUD, trash/restore, date sections (identical to macOS) |
+| `SyncService.swift` | `NoteSync` — per-note WebSocket, auto-reconnect (identical to macOS) |
+| `BlobStore.swift` | Local blob cache, pending upload queue, `PUT /blobs/:id` (identical to macOS) |
+| `LocalStore.swift` | Read/write `data.json` in Application Support (identical to macOS) |
+| `MarkdownEditor.swift` | `UITextView`-based rich editor: inline images (paste + PhotosPicker), Markdown styling |
 
-### Code sharing with macOS
-`LocalStore.swift`, `SyncService.swift`, and `Models.swift` are functionally identical to the macOS versions. The view layer (`ContentView.swift`, `NoteViewModel.swift`) is adapted for touch — alert-based dialogs instead of popover context menus where needed, keyboard type hints in `SettingsView`.
+### Platform differences vs macOS
+
+| macOS | iOS |
+|-------|-----|
+| `NSTextView` + `NSScrollView` | `UITextView` (scroll built-in) |
+| `NSImage` | `UIImage` |
+| `NSPasteboard` | `UIPasteboard` |
+| Drag & drop for images | PhotosPicker toolbar button + paste |
+| Settings in editor toolbar | Settings in sidebar toolbar (⚙) |
+| `.navigationSubtitle(...)` | Dropped (not available on iOS) |
+| `AppDelegate` activation hack | Not needed |
+| Cmd+N menu command | Not applicable |
+
+### Code shared verbatim with macOS
+
+`Models.swift`, `APIClient.swift`, `KeychainStore.swift`, `SyncService.swift`, `LocalStore.swift`, `BlobStore.swift`, `NoteViewModel.swift` — all identical.
 
 ### Known quirks
-- `NavigationSplitView` on iPhone collapses to a stack — the three-column layout becomes a drill-down navigation. Works correctly on iPad and in landscape on large iPhones.
+
+- `NavigationSplitView` on iPhone collapses to a stack — three-column becomes drill-down. Works as intended on iPad and in landscape on large iPhones.
+- Image insertion via PhotosPicker passes `Data` through a `@Binding var pendingImageData` on `MarkdownEditor` to avoid UIKit/SwiftUI bridging complexity.
 
 ---
 

@@ -2035,3 +2035,90 @@ shows macOS ✅ for trash.
 > almost embarrassingly easy to implement compared to the GTK equivalent. But the Markdown
 > editor — NSTextView with custom attachment handling — is genuinely tricky and not something
 > SwiftUI gives you for free.*
+
+---
+
+## March 14, 2026 — Rebuilding the iOS client from scratch
+
+### Why the old one had to go
+
+The old iOS app was a Phase 1-era codebase: single shared note, no auth, a simple
+`URLSessionWebSocketTask` wrapper talking to the original single-note server. Since then,
+the server grew user accounts, JWT, REST CRUD, folders, trash, per-note WebSockets, and
+blob storage. The mac client caught up feature-for-feature. The old iOS app was just
+stranded — not worth patching.
+
+The decision was the same one made with the C++ Linux client before rewriting it in Rust:
+preserve the old code in `legacy-code/ios/`, start clean, and take the mac client as
+the specification. If it works on mac, it should work identically on iOS.
+
+> 📝 *Write here: was there any hesitation about throwing away the old iOS code? What
+> was the emotional or practical calculus? Did the legacy-code folder make it easier?*
+
+### What "take mac as gospel" means in practice
+
+Seven of the twelve files are straight copies — not adaptations, not ports, copies:
+`Models.swift`, `APIClient.swift`, `KeychainStore.swift`, `SyncService.swift`,
+`LocalStore.swift`, `BlobStore.swift`, `NoteViewModel.swift`. The entire sync engine,
+auth logic, REST client, local persistence, blob queue, and per-note WebSocket are
+100% shared between the two Apple platforms. Swift's ability to target both macOS and
+iOS from the same source without conditional compilation was one of the original
+reasons for choosing it, and it delivered exactly that here.
+
+The only files that needed real work were the ones that touch UI or system APIs:
+`NoteApp.swift` (trivial — drop the AppDelegate hack iOS doesn't need),
+`AuthView.swift` (swap `NSPasteboard` for `UIPasteboard`),
+`ContentView.swift` (drop `navigationSubtitle`, move Settings from editor toolbar
+to sidebar), and `MarkdownEditor.swift` (the real work).
+
+### Porting the Markdown editor: NSTextView → UITextView
+
+The mac editor is built on `NSTextView` + `NSScrollView`. On iOS the equivalent is
+`UITextView`, which already scrolls — no wrapper. The `NSTextStorage` / `NSLayoutManager`
+layer that does all the markdown syntax highlighting is exactly the same on both platforms
+(it's Foundation, not AppKit). So `applyMarkdownStyling()`, `applyLineStyle()`, and
+`extractMarkdown()` translate almost character-for-character, just swapping:
+
+- `NSFont` → `UIFont`
+- `NSColor.labelColor` → `UIColor.label`
+- `NSColor.tertiaryLabelColor` → `UIColor.tertiaryLabel`
+- `NSImage` → `UIImage`
+
+The trickier part was the Enter key. On macOS, `NSTextView.keyDown(with:)` intercepts
+the Return key before the text system processes it. On iOS, there's no `keyDown` —
+instead, `UITextView.insertText(_:)` is overridden to catch `"\n"` before calling
+`super.insertText`. The list-continuation logic (smart bullets, ordered lists, empty
+line exits) is the same algorithm; the intercept point is different.
+
+Text replacement inside the Enter handler also differs. On macOS, `insertText(_:replacementRange:)`
+takes an `NSRange`. On iOS, the cleanest path is `UITextInput.replace(_:withText:)` which
+takes a `UITextRange` and properly fires all delegate callbacks. Converting an `NSRange`
+to a `UITextRange` requires chaining `position(from:offset:)` and `textRange(from:to:)` —
+a minor but slightly clunky UIKit ritual.
+
+### Image insertion
+
+The mac editor supports drag & drop and paste. iOS doesn't have drag & drop in the same
+sense, so the approach was:
+
+1. **Paste**: override `UITextView.paste(_:)`, check `UIPasteboard.general.image`, convert
+   to PNG data, call `insertBlobData`. Simple.
+
+2. **PhotosPicker**: a SwiftUI `PhotosPicker` button (`photo.badge.plus`) in the note
+   editor toolbar. Because `MarkdownEditor` is a `UIViewRepresentable`, passing the selected
+   image data into the UIKit layer is done via a `@Binding var pendingImageData: Data?`.
+   `updateUIView` watches for a non-nil value and calls `tv.insertBlobData(data)` on the
+   underlying `MarkdownTextView`. It's not the most elegant bridging pattern, but it's
+   clean enough and avoids the alternative (notifications, custom delegates, or routing
+   through the ViewModel).
+
+### Where things stand
+
+The iOS client is now at full feature parity with the macOS client: auth, folders, notes,
+trash, date-grouped list, inline images, Markdown styling, offline-first sync, per-note
+WebSocket. The matrix is updated. The old app is in `legacy-code/ios/`.
+
+> 📝 *Write here: what does it feel like to have a phone client again — and one that
+> actually syncs with the server you built yourself? The first time a note you type on
+> your phone appears on your Mac without any manual action — is that the moment this stops
+> feeling like a coding exercise and starts feeling like a real product?*
