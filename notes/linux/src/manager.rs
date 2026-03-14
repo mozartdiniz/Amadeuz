@@ -68,6 +68,8 @@ pub struct NotesManager {
     pub on_state_changed: Option<std::rc::Rc<dyn Fn()>>,
     pub on_auth_error: Option<std::rc::Rc<dyn Fn(String)>>,
     pub on_recovery_code: Option<std::rc::Rc<dyn Fn(String)>>,
+    /// Called when a WS update arrives for a note (note_id, title, content).
+    pub on_note_ws_update: Option<std::rc::Rc<dyn Fn(String, String, String)>>,
 }
 
 impl NotesManager {
@@ -89,6 +91,7 @@ impl NotesManager {
             on_state_changed: None,
             on_auth_error: None,
             on_recovery_code: None,
+            on_note_ws_update: None,
         }));
 
         (mgr, rx)
@@ -235,12 +238,15 @@ impl NotesManager {
             }
 
             AppEvent::NoteWsUpdate { note_id, title, content, updated_at } => {
-                let state_cb = {
+                let (state_cb, ws_update_cb) = {
                     let mut m = mgr.borrow_mut();
-                    m.apply_ws_update(&note_id, title, content, updated_at);
-                    m.on_state_changed.clone()
+                    m.apply_ws_update(&note_id, title.clone(), content.clone(), updated_at);
+                    let ws_cb = m.on_note_ws_update.clone()
+                        .map(|cb| (cb, note_id.clone(), title.clone(), content.clone()));
+                    (m.on_state_changed.clone(), ws_cb)
                 };
                 if let Some(cb) = state_cb { cb(); }
+                if let Some((cb, id, t, c)) = ws_update_cb { cb(id, t, c); }
             }
 
             AppEvent::WsConnected => {

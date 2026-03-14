@@ -77,7 +77,10 @@
       "Bash(ninja -C build 2>&1 | grep -E \"error\\\\[|^error|-->\" | head -20)",
       "Bash(pkg-config --exists gtksourceview-5 && echo \"installed\" || echo \"not installed\" && rpm -qa | grep -i sourceview | head -5)",
       "Bash(rpm -qa | grep gtksourceview5)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(cd /home/mozartdiniz/Dev/Amadeuz/notes/linux && ninja -C builddir 2>&1 | tail -30)",
+      "Bash(ninja -C builddir 2>&1 | tail -20)",
+      "Bash(ninja -C builddir 2>&1 | tail -15)"
     ]
   }
 }

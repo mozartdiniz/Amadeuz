@@ -84,7 +84,20 @@ mod imp {
 
             // Kick off a full sync to merge with server state.
             if is_authenticated {
-                NotesManager::full_sync(mgr);
+                NotesManager::full_sync(mgr.clone());
+            }
+
+            // Periodic background sync every 30 seconds so the note list
+            // stays up to date without requiring a re-login.
+            {
+                let mgr = mgr.clone();
+                glib::timeout_add_seconds_local(30, move || {
+                    let is_auth = mgr.borrow().is_authenticated;
+                    if is_auth {
+                        NotesManager::full_sync(mgr.clone());
+                    }
+                    glib::ControlFlow::Continue
+                });
             }
         }
     }

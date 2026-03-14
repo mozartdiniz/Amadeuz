@@ -145,6 +145,12 @@ impl AmzWindow {
             let win = self.clone();
             mgr.borrow_mut().on_state_changed = Some(Rc::new(move || win.refresh_ui()));
         }
+        {
+            let win = self.clone();
+            mgr.borrow_mut().on_note_ws_update = Some(Rc::new(move |note_id, title, content| {
+                win.apply_ws_update_to_editor(&note_id, title, content);
+            }));
+        }
 
         // Bind folder store to folder_list.
         {
@@ -704,6 +710,31 @@ impl AmzWindow {
         *imp.loading_note.borrow_mut() = true;
         imp.text_view.buffer().set_text("");
         *imp.loading_note.borrow_mut() = false;
+    }
+
+    /// Called when a WS update arrives for a note. If the note is currently
+    /// open in the editor, refreshes the buffer without triggering a save loop.
+    fn apply_ws_update_to_editor(&self, note_id: &str, title: String, content: String) {
+        let imp = self.imp();
+        let Some(mgr) = imp.manager.borrow().clone() else { return };
+        let selected = mgr.borrow().selected_note_id.clone();
+        if selected.as_deref() != Some(note_id) {
+            return;
+        }
+        let combined = if title.is_empty() {
+            content
+        } else if content.is_empty() {
+            title
+        } else {
+            format!("{}\n{}", title, content)
+        };
+        let buf = imp.text_view.buffer();
+        let current = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+        if current != combined {
+            *imp.loading_note.borrow_mut() = true;
+            buf.set_text(&combined);
+            *imp.loading_note.borrow_mut() = false;
+        }
     }
 
     // ── Actions ───────────────────────────────────────────────────────────────
