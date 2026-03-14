@@ -1114,15 +1114,13 @@ impl AmzWindow {
             Some(api) if api.token.is_some() => api,
             _ => return,
         };
-        let win_weak = self.downgrade();
-        // Split into two halves: tokio I/O (must be Send) and GTK callback (must run on
-        // main context). A oneshot channel bridges them without capturing GTK types in
-        // the Send future.
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        // Fire-and-forget: download missing blobs on the tokio runtime.
+        // No channel back to GTK — the GTK side polls independently (see below).
+        let ids_for_download = missing.clone();
         crate::spawn(async move {
             // Retry delays in seconds: 1, 2, 4, 8, 16
             const DELAYS: &[u64] = &[1, 2, 4, 8, 16];
-            let mut still_missing = missing;
+            let mut still_missing = ids_for_download;
             for &delay in DELAYS {
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                 let mut failed = Vec::new();
@@ -1134,13 +1132,6 @@ impl AmzWindow {
                                 std::fs::create_dir_all(parent).ok();
                             }
                             std::fs::write(&path, &data).ok();
-                            // Trigger re-embed after each successful download.
-                            let win_weak2 = win_weak.clone();
-                            glib::idle_add_once(move || {
-                                if let Some(win) = win_weak2.upgrade() {
-                                    win.schedule_image_embed();
-                                }
-                            });
                         }
                         Err(_) => failed.push(id),
                     }
@@ -1148,13 +1139,24 @@ impl AmzWindow {
                 still_missing = failed;
                 if still_missing.is_empty() { break; }
             }
-            let _ = tx.send(());
         });
-        // Back on GTK main thread — trigger a re-embed now that blobs are cached.
-        glib::MainContext::default().spawn_local(async move {
-            let _ = rx.await;
-            if let Some(win) = win_weak.upgrade() {
-                win.schedule_image_embed();
+
+        // Poll the blob cache every 500 ms on the GTK main thread.
+        // When all blobs are present, trigger a re-embed. Give up after 30 s.
+        let win_weak = self.downgrade();
+        let mut ticks = 0u32;
+        glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+            ticks += 1;
+            let all_cached = missing.iter().all(|id| md_formatter::blob_cache_path(id).exists());
+            if all_cached {
+                if let Some(win) = win_weak.upgrade() {
+                    win.schedule_image_embed();
+                }
+                glib::ControlFlow::Break
+            } else if ticks >= 60 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
             }
         });
     }
