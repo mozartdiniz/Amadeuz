@@ -371,9 +371,9 @@ impl AmzWindow {
         let imp = self.imp();
         let Some(mgr) = imp.manager.borrow().clone() else { return };
 
-        let (is_authenticated, is_connected, offline_mode, selected_note_id) = {
+        let (is_authenticated, is_connected, offline_mode, selected_note_id, selected_folder_id) = {
             let m = mgr.borrow();
-            (m.is_authenticated, m.is_connected, m.offline_mode, m.selected_note_id.clone())
+            (m.is_authenticated, m.is_connected, m.offline_mode, m.selected_note_id.clone(), m.selected_folder_id.clone())
         };
 
         // Rebuild menu to reflect current mode.
@@ -406,8 +406,24 @@ impl AmzWindow {
                 imp.status_label.set_text("Offline");
             }
 
-            // Auto-select the first note if none is currently selected.
-            if selected_note_id.is_none() {
+            // Auto-select All Notes + first note only on initial load
+            // (before the user has selected any folder).
+            if selected_folder_id.is_none() {
+                // Highlight the All Notes row in the sidebar.
+                if let Some(row) = imp.all_notes_list.row_at_index(0) {
+                    imp.all_notes_list.select_row(Some(&row));
+                }
+                imp.folder_list.unselect_all();
+                imp.wastebasket_list.unselect_all();
+                *imp.note_filter_folder.borrow_mut() = Some("__all__".into());
+                if let Some(f) = imp.note_filter.borrow().as_ref() {
+                    f.changed(gtk::FilterChange::Different);
+                }
+                if let Some(mgr) = imp.manager.borrow().clone() {
+                    mgr.borrow_mut().selected_folder_id = Some("__all__".into());
+                }
+
+                // Select the first note in the list, if any.
                 let first_note_id = imp.note_filter_model.borrow()
                     .as_ref()
                     .and_then(|m| m.item(0))

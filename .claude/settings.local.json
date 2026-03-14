@@ -80,7 +80,9 @@
       "Bash(git checkout:*)",
       "Bash(cd /home/mozartdiniz/Dev/Amadeuz/notes/linux && ninja -C builddir 2>&1 | tail -30)",
       "Bash(ninja -C builddir 2>&1 | tail -20)",
-      "Bash(ninja -C builddir 2>&1 | tail -15)"
+      "Bash(ninja -C builddir 2>&1 | tail -15)",
+      "Bash(ninja -C builddir 2>&1 | tail -10)",
+      "Bash(ninja -C builddir 2>&1 | tail -8)"
     ]
   }
 }
