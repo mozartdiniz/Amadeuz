@@ -753,6 +753,7 @@ impl AmzWindow {
             *imp.loading_note.borrow_mut() = true;
             buf.set_text(&combined);
             *imp.loading_note.borrow_mut() = false;
+            self.prefetch_blobs(&combined);
         }
     }
 
@@ -1098,6 +1099,10 @@ impl AmzWindow {
     /// For each `amadeuz://blob/{id}` in `content` that isn't cached locally,
     /// download it from the server and save to the blob cache, then trigger
     /// a re-embed so the image appears without any user action.
+    ///
+    /// Retries up to 5 times with increasing delays to handle the race where
+    /// the note content arrives via WebSocket before the sender's blob upload
+    /// has finished.
     fn prefetch_blobs(&self, content: &str) {
         let ids = md_formatter::blob_ids_in_content(content);
         let missing: Vec<String> = ids.into_iter()
@@ -1111,21 +1116,34 @@ impl AmzWindow {
         };
         let win_weak = self.downgrade();
         crate::spawn(async move {
-            for id in missing {
-                if let Ok(data) = api.download_blob(&id).await {
-                    let path = md_formatter::blob_cache_path(&id);
-                    if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent).ok();
+            // Retry delays in seconds: 1, 2, 4, 8, 16
+            const DELAYS: &[u64] = &[1, 2, 4, 8, 16];
+            let mut still_missing = missing;
+            for &delay in DELAYS {
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                let mut failed = Vec::new();
+                for id in still_missing {
+                    match api.download_blob(&id).await {
+                        Ok(data) => {
+                            let path = md_formatter::blob_cache_path(&id);
+                            if let Some(parent) = path.parent() {
+                                std::fs::create_dir_all(parent).ok();
+                            }
+                            std::fs::write(&path, &data).ok();
+                            // Trigger re-embed after each successful download.
+                            let win_weak2 = win_weak.clone();
+                            glib::idle_add_once(move || {
+                                if let Some(win) = win_weak2.upgrade() {
+                                    win.schedule_image_embed();
+                                }
+                            });
+                        }
+                        Err(_) => failed.push(id),
                     }
-                    std::fs::write(&path, &data).ok();
                 }
+                still_missing = failed;
+                if still_missing.is_empty() { break; }
             }
-            // Back on GTK main thread — trigger a re-embed now that blobs are cached.
-            glib::idle_add_once(move || {
-                if let Some(win) = win_weak.upgrade() {
-                    win.schedule_image_embed();
-                }
-            });
         });
     }
 
