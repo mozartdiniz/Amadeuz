@@ -46,6 +46,22 @@ Part of the [Amadeuz](../../README.md) self-hosted notes project.
 sudo dnf install meson rust cargo libadwaita-devel libsecret-devel blueprint-compiler
 ```
 
+**Pop!_OS / Ubuntu / Debian:**
+```bash
+sudo apt update && sudo apt install -y \
+    build-essential \
+    pkg-config \
+    meson \
+    rustc \
+    cargo \
+    libadwaita-1-dev \
+    libsecret-1-dev \
+    libglib2.0-dev \
+    libgtk-4-dev \
+    libgraphene-1.0-dev \
+    libxml2-utils \
+    blueprint-compiler
+
 ### First-time setup
 
 ```bash

@@ -14,8 +14,8 @@ log = "0.4"
 pretty_env_logger = "0.5"
 
 # GTK4 / Libadwaita
-gtk = { package = "gtk4", version = "0.10", features = ["gnome_47"] }
-adw = { package = "libadwaita", version = "0.8", features = ["v1_7"] }
+gtk = { package = "gtk4", version = "0.10", features = ["gnome_46"] }
+adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
 glib = "0.21"
 
 # Async runtime
