@@ -1115,6 +1115,10 @@ impl AmzWindow {
             _ => return,
         };
         let win_weak = self.downgrade();
+        // Split into two halves: tokio I/O (must be Send) and GTK callback (must run on
+        // main context). A oneshot channel bridges them without capturing GTK types in
+        // the Send future.
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         crate::spawn(async move {
             // Retry delays in seconds: 1, 2, 4, 8, 16
             const DELAYS: &[u64] = &[1, 2, 4, 8, 16];
@@ -1143,6 +1147,14 @@ impl AmzWindow {
                 }
                 still_missing = failed;
                 if still_missing.is_empty() { break; }
+            }
+            let _ = tx.send(());
+        });
+        // Back on GTK main thread — trigger a re-embed now that blobs are cached.
+        glib::MainContext::default().spawn_local(async move {
+            let _ = rx.await;
+            if let Some(win) = win_weak.upgrade() {
+                win.schedule_image_embed();
             }
         });
     }
