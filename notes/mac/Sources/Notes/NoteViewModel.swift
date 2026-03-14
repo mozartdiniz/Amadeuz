@@ -1,17 +1,25 @@
 import Combine
 import Foundation
 
+// MARK: - Date section model
+
+struct NoteSection: Identifiable {
+    let id: String
+    let title: String
+    let notes: [Note]
+}
+
 @MainActor
 final class NotesViewModel: ObservableObject {
 
-    /// Sentinel folder ID used for the hardcoded "All Notes" view.
+    /// Sentinel folder IDs for virtual views.
     static let allNotesID = "__all__"
+    static let trashID    = "__trash__"
 
     // MARK: - Published state
 
     @Published var isAuthenticated = false
     @Published var authError: String?
-    /// Set after register/recover. ContentView shows it as a sheet that survives the auth transition.
     @Published var pendingRecoveryCode: String?
 
     @Published var folders: [Folder] = []
@@ -20,8 +28,8 @@ final class NotesViewModel: ObservableObject {
     @Published var selectedFolderID: String?
     @Published var selectedNoteID: String?
 
-    @Published var editingContent: String = ""
-    @Published var editingTitle: String   = ""
+    /// Single editor body: first line is the title, rest is content.
+    @Published var editingBody: String = ""
 
     @Published var searchText: String = "" {
         didSet {
@@ -49,19 +57,88 @@ final class NotesViewModel: ObservableObject {
         folders.first { $0.id == selectedFolderID }
     }
 
+    var isTrashView: Bool { selectedFolderID == Self.trashID }
+
+    var currentFolderTitle: String {
+        switch selectedFolderID {
+        case Self.allNotesID: return "All Notes"
+        case Self.trashID:    return "Recently Deleted"
+        case let id?:         return folders.first { $0.id == id }?.name ?? "Notes"
+        case nil:             return "Notes"
+        }
+    }
+
+    var currentFolderSubtitle: String {
+        let count = notesInSelectedFolder.count
+        return "\(count) \(count == 1 ? "note" : "notes")"
+    }
+
+    var allNotesCount: Int {
+        notes.filter { !$0.isTrashed }.count
+    }
+
+    var trashCount: Int {
+        notes.filter { $0.isTrashed }.count
+    }
+
+    func noteCount(for folderID: String) -> Int {
+        notes.filter { !$0.isTrashed && $0.folderID == folderID }.count
+    }
+
     var notesInSelectedFolder: [Note] {
         let sorted = notes.sorted { $0.updatedAt > $1.updatedAt }
+
+        if selectedFolderID == Self.trashID {
+            return sorted.filter { $0.isTrashed }
+        }
+
+        let active = sorted.filter { !$0.isTrashed }
         let folderFiltered: [Note]
         if let id = selectedFolderID, id != Self.allNotesID {
-            folderFiltered = sorted.filter { $0.folderID == id }
+            folderFiltered = active.filter { $0.folderID == id }
         } else {
-            folderFiltered = sorted
+            folderFiltered = active
         }
+
         guard !searchText.isEmpty else { return folderFiltered }
         let query = searchText.lowercased()
         return folderFiltered.filter {
             $0.title.lowercased().contains(query) || $0.content.lowercased().contains(query)
         }
+    }
+
+    /// Notes grouped by recency for the middle column.
+    var noteSections: [NoteSection] {
+        let items = notesInSelectedFolder
+        guard !items.isEmpty else { return [] }
+
+        let now = Date()
+        let cal = Calendar.current
+
+        var today:  [Note] = []
+        var week:   [Note] = []
+        var month:  [Note] = []
+        var older:  [Note] = []
+
+        for note in items {
+            let date = Date(timeIntervalSince1970: Double(note.updatedAt) / 1000)
+            if cal.isDateInToday(date) {
+                today.append(note)
+            } else if let weekAgo = cal.date(byAdding: .day, value: -7, to: now), date > weekAgo {
+                week.append(note)
+            } else if let monthAgo = cal.date(byAdding: .day, value: -30, to: now), date > monthAgo {
+                month.append(note)
+            } else {
+                older.append(note)
+            }
+        }
+
+        return [
+            NoteSection(id: "today",  title: "Today",            notes: today),
+            NoteSection(id: "week",   title: "Previous 7 Days",  notes: week),
+            NoteSection(id: "month",  title: "Previous 30 Days", notes: month),
+            NoteSection(id: "older",  title: "Older",            notes: older),
+        ].filter { !$0.notes.isEmpty }
     }
 
     // MARK: - Private
@@ -72,8 +149,6 @@ final class NotesViewModel: ObservableObject {
     private var noteSync: NoteSync?
     private var cancellables = Set<AnyCancellable>()
     private var isSyncing = false
-
-    /// Tracks which note is currently loaded so we can flush before switching.
     private var editingNoteID: String?
 
     // MARK: - Init
@@ -99,6 +174,7 @@ final class NotesViewModel: ObservableObject {
         }
 
         setupDebounce()
+        startPeriodicSync()
     }
 
     // MARK: - Auth
@@ -118,7 +194,7 @@ final class NotesViewModel: ObservableObject {
         authError = nil
         do {
             let resp = try await api.register(email: email, password: password)
-            pendingRecoveryCode = resp.recoveryCode   // set BEFORE applyToken so ContentView shows it
+            pendingRecoveryCode = resp.recoveryCode
             applyToken(resp.token)
             await fullSync()
         } catch {
@@ -130,7 +206,7 @@ final class NotesViewModel: ObservableObject {
         authError = nil
         do {
             let resp = try await api.recover(email: email, code: code, newPassword: newPassword)
-            pendingRecoveryCode = resp.recoveryCode   // set BEFORE applyToken
+            pendingRecoveryCode = resp.recoveryCode
             applyToken(resp.token)
             await fullSync()
         } catch {
@@ -164,7 +240,6 @@ final class NotesViewModel: ObservableObject {
             async let sn = api.listNotes()
             let (serverFolders, serverNotes) = try await (sf, sn)
 
-            // Capture current local state before computing diffs.
             let localFolders = folders
             let localNotes   = notes
 
@@ -173,13 +248,12 @@ final class NotesViewModel: ObservableObject {
             let localNoteIDs    = Set(localNotes.map { $0.id })
 
             let localOnlyFolders = localFolders.filter { !serverFolderIDs.contains($0.id) }
-            let localOnlyNotes   = localNotes.filter   { serverNoteMap[$0.id] == nil }
+            let localOnlyNotes   = localNotes.filter   { serverNoteMap[$0.id] == nil && !$0.isTrashed }
             let newerLocalNotes  = localNotes.filter   { n in
                 guard let sv = serverNoteMap[n.id] else { return false }
-                return n.updatedAt > sv.updatedAt
+                return n.updatedAt > sv.updatedAt && !n.isTrashed
             }
 
-            // Push offline-only and locally-newer items (failures are silent; next sync retries).
             await withTaskGroup(of: Void.self) { group in
                 for f in localOnlyFolders {
                     group.addTask {
@@ -204,7 +278,6 @@ final class NotesViewModel: ObservableObject {
                 }
             }
 
-            // Merge state.
             folders = serverFolders + localOnlyFolders
 
             var merged = [Note]()
@@ -212,7 +285,7 @@ final class NotesViewModel: ObservableObject {
                 if let sv = serverNoteMap[local.id] {
                     merged.append(local.updatedAt > sv.updatedAt ? local : sv)
                 } else {
-                    merged.append(local)   // local-only
+                    merged.append(local)
                 }
             }
             for sv in serverNotes where !localNoteIDs.contains(sv.id) {
@@ -220,10 +293,8 @@ final class NotesViewModel: ObservableObject {
             }
             notes = merged
 
-            // Refresh editor if the active note was superseded by the server.
             if let id = selectedNoteID, let n = notes.first(where: { $0.id == id }) {
-                editingTitle   = n.title
-                editingContent = n.content
+                editingBody = bodyFrom(n)
             }
 
             localStore.save(folders: folders, notes: notes)
@@ -265,8 +336,7 @@ final class NotesViewModel: ObservableObject {
         notes[idx].title     = msg.title   ?? notes[idx].title
         notes[idx].content   = msg.content ?? notes[idx].content
         notes[idx].updatedAt = msgUpdatedAt
-        editingTitle   = notes[idx].title
-        editingContent = notes[idx].content
+        editingBody = bodyFrom(notes[idx])
         localStore.save(folders: folders, notes: notes)
     }
 
@@ -278,26 +348,35 @@ final class NotesViewModel: ObservableObject {
         notes[idx].title     = msg.title   ?? notes[idx].title
         notes[idx].content   = msg.content ?? notes[idx].content
         notes[idx].updatedAt = msgUpdatedAt
-        editingTitle   = notes[idx].title
-        editingContent = notes[idx].content
+        editingBody = bodyFrom(notes[idx])
         localStore.save(folders: folders, notes: notes)
     }
 
     // MARK: - Debounce
 
     private func setupDebounce() {
-        Publishers.CombineLatest($editingTitle, $editingContent)
+        $editingBody
             .dropFirst()
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { [weak self] title, content in
+            .sink { [weak self] body in
                 guard let self, let noteID = self.editingNoteID else { return }
-                self.flushNote(id: noteID, title: title, content: content)
+                self.flushNote(id: noteID, body: body)
             }
             .store(in: &cancellables)
     }
 
-    /// Persists and syncs the note only if its content actually changed.
-    private func flushNote(id: String, title: String, content: String) {
+    private func startPeriodicSync() {
+        Timer.publish(every: 30, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self, self.isAuthenticated else { return }
+                Task { await self.fullSync() }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func flushNote(id: String, body: String) {
+        let (title, content) = splitBody(body)
         guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
         let stored = notes[idx]
         guard stored.title != title || stored.content != content else { return }
@@ -314,7 +393,7 @@ final class NotesViewModel: ObservableObject {
 
     func noteSelectionChanged(from oldID: String?, to newID: String?) {
         if let old = oldID, old == editingNoteID {
-            flushNote(id: old, title: editingTitle, content: editingContent)
+            flushNote(id: old, body: editingBody)
         }
         noteSync = nil
         loadNoteIntoEditor(newID.flatMap { id in notes.first { $0.id == id } })
@@ -322,8 +401,6 @@ final class NotesViewModel: ObservableObject {
     }
 
     func folderSelectionChanged() {
-        // Setting selectedNoteID = nil triggers onChange → noteSelectionChanged,
-        // which flushes before clearing the editor.
         selectedNoteID = nil
     }
 
@@ -347,9 +424,13 @@ final class NotesViewModel: ObservableObject {
 
     func deleteFolder(id: String) {
         folders.removeAll { $0.id == id }
-        notes.removeAll   { $0.folderID == id }
+        notes = notes.map { note in
+            var n = note
+            if n.folderID == id { n.folderID = "" }
+            return n
+        }
         if selectedFolderID == id {
-            selectedFolderID = nil
+            selectedFolderID = Self.allNotesID
             clearEditor()
         }
         localStore.save(folders: folders, notes: notes)
@@ -359,7 +440,7 @@ final class NotesViewModel: ObservableObject {
     // MARK: - Note actions
 
     func createNote() {
-        guard selectedFolderID != nil else { return }
+        guard selectedFolderID != nil, !isTrashView else { return }
         let folderID: String? = (selectedFolderID == Self.allNotesID) ? nil : selectedFolderID
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         let note = Note(
@@ -373,7 +454,7 @@ final class NotesViewModel: ObservableObject {
         notes.append(note)
         localStore.save(folders: folders, notes: notes)
         if let old = editingNoteID {
-            flushNote(id: old, title: editingTitle, content: editingContent)
+            flushNote(id: old, body: editingBody)
         }
         noteSync = nil
         loadNoteIntoEditor(note)
@@ -405,7 +486,26 @@ final class NotesViewModel: ObservableObject {
         Task { try? await self.api.moveNote(id: id, folderID: folderID.isEmpty ? nil : folderID) }
     }
 
-    func deleteNote(id: String) {
+    func trashNote(id: String) {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        if let idx = notes.firstIndex(where: { $0.id == id }) {
+            notes[idx].deletedAt = now
+        }
+        if selectedNoteID == id { clearEditor() }
+        localStore.save(folders: folders, notes: notes)
+        Task { try? await self.api.trashNote(id: id) }
+    }
+
+    func restoreNote(id: String) {
+        if let idx = notes.firstIndex(where: { $0.id == id }) {
+            notes[idx].deletedAt = nil
+        }
+        if selectedNoteID == id { clearEditor() }
+        localStore.save(folders: folders, notes: notes)
+        Task { try? await self.api.restoreNote(id: id) }
+    }
+
+    func permanentlyDeleteNote(id: String) {
         notes.removeAll { $0.id == id }
         if selectedNoteID == id { clearEditor() }
         localStore.save(folders: folders, notes: notes)
@@ -419,8 +519,6 @@ final class NotesViewModel: ObservableObject {
         api.token       = token
         blobStore.token = token
         isAuthenticated = true
-        // Wipe any previous user's data so fullSync starts clean.
-        // (init-path resume keeps local data; only explicit auth calls go through here.)
         folders = []
         notes   = []
         clearEditor()
@@ -428,16 +526,26 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func loadNoteIntoEditor(_ note: Note?) {
-        editingNoteID  = note?.id
-        editingTitle   = note?.title   ?? ""
-        editingContent = note?.content ?? ""
+        editingNoteID = note?.id
+        editingBody   = note.map { bodyFrom($0) } ?? ""
     }
 
     private func clearEditor() {
         selectedNoteID = nil
         editingNoteID  = nil
-        editingTitle   = ""
-        editingContent = ""
+        editingBody    = ""
+    }
+
+    private func bodyFrom(_ note: Note) -> String {
+        note.content.isEmpty ? note.title : note.title + "\n" + note.content
+    }
+
+    private func splitBody(_ body: String) -> (title: String, content: String) {
+        if let nl = body.firstIndex(of: "\n") {
+            return (String(body[body.startIndex..<nl]),
+                    String(body[body.index(after: nl)...]))
+        }
+        return (body, "")
     }
 
     private func errorMessage(_ error: Error) -> String {
@@ -445,7 +553,6 @@ final class NotesViewModel: ObservableObject {
     }
 
     static func normalizeServerAddress(_ addr: String) -> String {
-        // Migrate old ws:// / wss:// format from previous version.
         if addr.hasPrefix("wss://") || addr.hasPrefix("ws://") {
             let http = addr
                 .replacingOccurrences(of: "wss://", with: "https://")

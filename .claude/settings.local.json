@@ -82,7 +82,10 @@
       "Bash(ninja -C builddir 2>&1 | tail -20)",
       "Bash(ninja -C builddir 2>&1 | tail -15)",
       "Bash(ninja -C builddir 2>&1 | tail -10)",
-      "Bash(ninja -C builddir 2>&1 | tail -8)"
+      "Bash(ninja -C builddir 2>&1 | tail -8)",
+      "Bash(find /Users/mozartdiniz/Dev/amadeuz/legacy-code -type f \\\\\\( -name \"*.swift\" -o -name \"*.md\" -o -name \"*.sh\" \\\\\\) 2>/dev/null | head -20)",
+      "Bash(cd /Users/mozartdiniz/Dev/amadeuz/notes/linux && cargo check 2>&1 | grep -E \"^error|warning\\\\[\" | head -30)",
+      "Bash(cargo check:*)"
     ]
   }
 }

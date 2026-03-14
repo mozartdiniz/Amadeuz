@@ -12,7 +12,6 @@ final class BlobStore {
     private var serverBase: String
     private var pendingIDs: Set<String>
 
-    /// JWT token used for authenticated uploads. Set by NoteViewModel after login.
     var token: String?
 
     init(serverBase: String) {
@@ -29,10 +28,6 @@ final class BlobStore {
         serverBase = base
     }
 
-    // MARK: - Local save (works offline)
-
-    /// Saves image data locally with a client-generated UUID and queues it for upload.
-    /// Returns the blob ID that should be embedded in the note content.
     func save(_ data: Data) throws -> String {
         let id = UUID().uuidString.lowercased()
         try data.write(to: cacheURL(for: id), options: .atomic)
@@ -41,16 +36,10 @@ final class BlobStore {
         return id
     }
 
-    // MARK: - Cache read
-
     func cachedData(for id: String) -> Data? {
         try? Data(contentsOf: cacheURL(for: id))
     }
 
-    // MARK: - Upload (requires connection)
-
-    /// Uploads a single locally cached blob to the server via PUT /blobs/:id.
-    /// Idempotent — safe to retry. Removes from pending queue on success.
     func upload(id: String) async throws {
         guard let data = cachedData(for: id) else { return }
         guard let url = URL(string: "\(serverBase)/blobs/\(id)") else { throw URLError(.badURL) }
@@ -69,17 +58,13 @@ final class BlobStore {
         savePending()
     }
 
-    /// Uploads all blobs that haven't reached the server yet. Call on reconnect.
     func uploadPending() async {
-        let ids = pendingIDs // snapshot — set may change during iteration
+        let ids = pendingIDs
         for id in ids {
             try? await upload(id: id)
         }
     }
 
-    // MARK: - Download
-
-    /// Returns locally cached data if available; otherwise downloads from server and caches.
     func download(id: String) async throws -> Data {
         if let cached = cachedData(for: id) { return cached }
         guard let url = URL(string: "\(serverBase)/blobs/\(id)") else { throw URLError(.badURL) }
@@ -87,8 +72,6 @@ final class BlobStore {
         try? data.write(to: cacheURL(for: id), options: .atomic)
         return data
     }
-
-    // MARK: - Pending queue persistence
 
     private func savePending() {
         guard let data = try? JSONEncoder().encode(Array(pendingIDs)) else { return }

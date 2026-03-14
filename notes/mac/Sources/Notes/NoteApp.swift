@@ -11,7 +11,7 @@ struct NoteApp: App {
             ContentView()
                 .environmentObject(vm)
         }
-        .defaultSize(width: 1000, height: 680)
+        .defaultSize(width: 1100, height: 720)
         .commands {
             CommandGroup(after: .appInfo) {
                 Divider()
@@ -19,6 +19,13 @@ struct NoteApp: App {
                     vm.logout()
                 }
                 .disabled(!vm.isAuthenticated)
+            }
+            CommandGroup(replacing: .newItem) {
+                Button("New Note") {
+                    vm.createNote()
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(!vm.isAuthenticated || vm.selectedFolderID == nil || vm.isTrashView)
             }
         }
     }

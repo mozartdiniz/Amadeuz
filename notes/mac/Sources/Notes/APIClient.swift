@@ -21,6 +21,12 @@ final class APIClient {
     var token: String?
 
     private let decoder = JSONDecoder()
+    private let session: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest  = 10
+        cfg.timeoutIntervalForResource = 30
+        return URLSession(configuration: cfg)
+    }()
 
     init(serverBase: String, token: String? = nil) {
         self.serverBase = serverBase
@@ -108,6 +114,16 @@ final class APIClient {
         return r.note
     }
 
+    func trashNote(id: String) async throws {
+        try await performVoid(try makeRequest(method: "PATCH", path: "/notes/\(id)/trash"))
+    }
+
+    func restoreNote(id: String) async throws -> Note {
+        struct R: Decodable { let note: Note }
+        let r: R = try await perform(try makeRequest(method: "PATCH", path: "/notes/\(id)/restore"))
+        return r.note
+    }
+
     func deleteNote(id: String) async throws {
         try await delete("/notes/\(id)")
     }
@@ -154,20 +170,19 @@ final class APIClient {
         }
     }
 
-    /// Reads a plain-text error body from the server (trimming whitespace).
     private func serverMessage(_ data: Data) -> String? {
         let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (s?.isEmpty == false) ? s : nil
     }
 
     private func perform<T: Decodable>(_ req: URLRequest) async throws -> T {
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         try checkStatus(response, body: data)
         return try decoder.decode(T.self, from: data)
     }
 
     private func performVoid(_ req: URLRequest) async throws {
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         try checkStatus(response, body: data)
     }
 

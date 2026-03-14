@@ -626,7 +626,9 @@ pub fn embed_images(
     let max_w = if editor_w > 100 { (editor_w as f64 * 0.80) as i32 } else { 700 };
 
     for (_start_byte, end_byte, path) in find_images(content) {
-        let abs_path = if let Some(filename) = path.strip_prefix("amz-image://") {
+        let abs_path = if let Some(blob_id) = path.strip_prefix("amadeuz://blob/") {
+            blob_cache_path(blob_id)
+        } else if let Some(filename) = path.strip_prefix("amz-image://") {
             image_store_dir(note_id).join(filename)
         } else {
             expand_path(&path)
@@ -677,6 +679,29 @@ fn expand_path(path: &str) -> std::path::PathBuf {
 
 pub fn image_store_dir(note_id: &str) -> std::path::PathBuf {
     glib::user_data_dir().join("amadeuz").join("images").join(note_id)
+}
+
+/// Local cache for server blobs (amadeuz://blob/{id}).
+/// Mirrors what the macOS BlobStore does in ~/Library/Application Support/amadeuz/blobs/.
+pub fn blob_cache_path(blob_id: &str) -> std::path::PathBuf {
+    glib::user_data_dir().join("amadeuz").join("blobs").join(blob_id)
+}
+
+/// Extract all `amadeuz://blob/{id}` references from note content.
+pub fn blob_ids_in_content(content: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let prefix = "amadeuz://blob/";
+    let mut hay = content;
+    while let Some(pos) = hay.find(prefix) {
+        let rest = &hay[pos + prefix.len()..];
+        let end = rest.find(|c: char| c == ')' || c.is_whitespace() || c == '"').unwrap_or(rest.len());
+        let id = &rest[..end];
+        if !id.is_empty() {
+            ids.push(id.to_string());
+        }
+        hay = &rest[end..];
+    }
+    ids
 }
 
 pub fn is_image_file(path: &std::path::Path) -> bool {

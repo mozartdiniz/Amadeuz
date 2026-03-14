@@ -15,7 +15,6 @@ final class BlobAttachment: NSTextAttachment {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Sets the image and scales it to fit within the editor width.
     func apply(image: NSImage) {
         self.image = image
         let maxW: CGFloat = 480
@@ -32,15 +31,10 @@ final class BlobAttachment: NSTextAttachment {
 // MARK: - MarkdownTextView
 
 /// NSTextView subclass that handles image paste and drag-and-drop.
-/// Images are uploaded as blobs and stored as Markdown references in the content string.
 final class MarkdownTextView: NSTextView {
 
     var blobStore: BlobStore?
-
-    /// Called after any content change (user typing or programmatic image insertion).
     var afterChange: (() -> Void)?
-
-    // MARK: Init
 
     override init(frame: NSRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -58,13 +52,84 @@ final class MarkdownTextView: NSTextView {
         registerForDraggedTypes([.fileURL, .tiff, .png])
     }
 
+    // MARK: - Key handling
+
+    override func keyDown(with event: NSEvent) {
+        // Return / Enter
+        if event.keyCode == 36 {
+            if handleEnterKey() { return }
+        }
+        super.keyDown(with: event)
+    }
+
+    /// Smart list continuation on Enter, mirroring the Linux md_formatter.
+    /// Returns true if the key was fully handled (suppresses default Enter).
+    private func handleEnterKey() -> Bool {
+        guard let storage = textStorage else { return false }
+        let nsStr   = storage.string as NSString
+        let cursor  = selectedRange().location
+        let lineNSRange = nsStr.lineRange(for: NSRange(location: cursor, length: 0))
+        // Text from start of line up to cursor
+        let lineText = nsStr.substring(with: NSRange(location: lineNSRange.location,
+                                                     length: cursor - lineNSRange.location))
+        // Split off leading whitespace (indent)
+        let indent  = String(lineText.prefix(while: { $0 == " " || $0 == "\t" }))
+        let trimmed = String(lineText.dropFirst(indent.count))
+
+        // Bullet markers — longest first so "- [ ] " matches before "- "
+        let bullets: [(String, String)] = [
+            ("- [ ] ", "- [ ] "), ("- [x] ", "- [ ] "), ("- [X] ", "- [ ] "),
+            ("+ [ ] ", "+ [ ] "), ("+ [x] ", "+ [ ] "), ("+ [X] ", "+ [ ] "),
+            ("* [ ] ", "* [ ] "), ("* [x] ", "* [ ] "), ("* [X] ", "* [ ] "),
+            ("- ", "- "), ("+ ", "+ "), ("* ", "* "),
+        ]
+        for (marker, continuation) in bullets {
+            guard trimmed.hasPrefix(marker) else { continue }
+            let content = String(trimmed.dropFirst(marker.count))
+            if content.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Empty item → exit list
+                let del = NSRange(location: lineNSRange.location,
+                                  length: cursor - lineNSRange.location)
+                insertText("\n", replacementRange: del)
+            } else {
+                insertText("\n" + indent + continuation, replacementRange: selectedRange())
+            }
+            return true
+        }
+
+        // Ordered list: "1. " or "1) "
+        if let (num, sep) = detectOrderedMarker(trimmed) {
+            let markerLen = "\(num)\(sep) ".count
+            let content   = String(trimmed.dropFirst(markerLen))
+            if content.trimmingCharacters(in: .whitespaces).isEmpty {
+                let del = NSRange(location: lineNSRange.location,
+                                  length: cursor - lineNSRange.location)
+                insertText("\n", replacementRange: del)
+            } else {
+                let next = (Int(num) ?? 1) + 1
+                insertText("\n" + indent + "\(next)\(sep) ", replacementRange: selectedRange())
+            }
+            return true
+        }
+
+        return false
+    }
+
+    private func detectOrderedMarker(_ trimmed: String) -> (num: String, sep: Character)? {
+        let digits = String(trimmed.prefix(while: { $0.isNumber }))
+        guard !digits.isEmpty else { return nil }
+        let rest = trimmed.dropFirst(digits.count)
+        guard let sep = rest.first, sep == "." || sep == ")" else { return nil }
+        guard rest.dropFirst().hasPrefix(" ") else { return nil }
+        return (digits, sep)
+    }
+
     // MARK: - Paste
 
     override func paste(_ sender: Any?) {
         if let data = imageData(from: NSPasteboard.general) {
             insertBlobData(data)
         } else if let str = NSPasteboard.general.string(forType: .string) {
-            // Paste as plain text — avoid polluting content with RTF/HTML attributes.
             insertText(str, replacementRange: selectedRange())
         }
     }
@@ -94,8 +159,6 @@ final class MarkdownTextView: NSTextView {
               let id = try? store.save(data),
               let image = NSImage(data: data) else { return }
 
-        // Image is already cached locally — insert with final ID immediately.
-        // Works fully offline; upload happens in background and is retried on reconnect.
         let att = BlobAttachment(blobID: id)
         att.apply(image: image)
         insertAttachment(att)
@@ -136,8 +199,6 @@ final class MarkdownTextView: NSTextView {
 
     // MARK: - Markdown extraction
 
-    /// Converts current NSAttributedString back to Markdown:
-    /// BlobAttachment → "![](amadeuz://blob/id)", everything else → plain text.
     func extractMarkdown() -> String {
         guard let storage = textStorage else { return "" }
         var result = ""
@@ -167,8 +228,6 @@ final class MarkdownTextView: NSTextView {
         pb.availableType(from: [.png, .tiff, .fileURL]) != nil
     }
 
-    /// Wraps an attachment in an attributed string that carries the correct text color,
-    /// preventing the NSTextView from deriving black from a color-less attachment character.
     private func attString(for att: BlobAttachment) -> NSAttributedString {
         let s = NSMutableAttributedString(attachment: att)
         s.addAttribute(.foregroundColor, value: NSColor.labelColor,
@@ -176,9 +235,6 @@ final class MarkdownTextView: NSTextView {
         return s
     }
 
-    /// After any programmatic insert, the cursor sits next to a character whose attributes
-    /// the NSTextView uses to rebuild typingAttributes. Re-inject the correct color so that
-    /// text typed after an image is not black.
     private func restoreTypingAttributes() {
         var attrs = typingAttributes
         attrs[.foregroundColor] = NSColor.labelColor
@@ -187,12 +243,10 @@ final class MarkdownTextView: NSTextView {
 
     // MARK: - Markdown styling
 
-    /// Fast path: re-styles only the paragraph containing the cursor.
-    /// Called on every keystroke — avoids full-document layout invalidation.
     func applyMarkdownStylingForCurrentLine() {
         guard let storage = textStorage, storage.length > 0 else { return }
-        let cursor  = min(selectedRange().location, storage.length - 1)
-        let nsStr   = storage.string as NSString
+        let cursor    = min(selectedRange().location, storage.length - 1)
+        let nsStr     = storage.string as NSString
         let paraRange = nsStr.paragraphRange(for: NSRange(location: cursor, length: 0))
         guard paraRange.length > 0 else { return }
 
@@ -211,7 +265,6 @@ final class MarkdownTextView: NSTextView {
             storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
         }
 
-        // Strip trailing line terminator before style matching.
         var lineRange = paraRange
         let lastChar = nsStr.character(at: lineRange.location + lineRange.length - 1)
         if lastChar == 0x000A || lastChar == 0x000D || lastChar == 0x2028 || lastChar == 0x2029 {
@@ -221,16 +274,19 @@ final class MarkdownTextView: NSTextView {
             applyLineStyle(nsStr.substring(with: lineRange), range: lineRange, in: storage)
         }
 
+        // Keep first line styled as title even while editing it.
+        if paraRange.location == 0 {
+            applyTitleStyle(in: storage, nsStr: nsStr)
+        }
+
         storage.endEditing()
     }
 
-    /// Full-document re-style. Use only on load and after image operations.
     func applyMarkdownStyling() {
         guard let storage = textStorage, storage.length > 0 else { return }
         let nsStr = storage.string as NSString
         let full  = NSRange(location: 0, length: storage.length)
 
-        // Collect attachment ranges before any mutation to avoid re-entrancy issues.
         var attachmentRanges: [NSRange] = []
         storage.enumerateAttribute(.attachment, in: full, options: []) { att, range, _ in
             if att != nil { attachmentRanges.append(range) }
@@ -238,32 +294,41 @@ final class MarkdownTextView: NSTextView {
 
         storage.beginEditing()
 
-        // Reset all characters to the base style.
         let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         storage.addAttribute(.font, value: baseFont, range: full)
         storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: full)
         storage.removeAttribute(.strikethroughStyle, range: full)
 
-        // Restore foregroundColor on attachments (required for correct typingAttributes).
         for range in attachmentRanges {
             storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
         }
 
-        // Apply per-line styles.
         nsStr.enumerateSubstrings(in: full, options: .byLines) { [weak self] _, lineRange, _, _ in
             guard let self, lineRange.length > 0 else { return }
             self.applyLineStyle(nsStr.substring(with: lineRange), range: lineRange, in: storage)
         }
 
+        // First line is always the note title — large bold regardless of content.
+        applyTitleStyle(in: storage, nsStr: nsStr)
+
         storage.endEditing()
     }
 
+    /// Always styles the first line as a large bold title (mirrors Linux TAG_TITLE: scale 1.8, bold).
+    private func applyTitleStyle(in storage: NSTextStorage, nsStr: NSString) {
+        let firstNL = nsStr.range(of: "\n")
+        let titleEnd = firstNL.location != NSNotFound ? firstNL.location : storage.length
+        guard titleEnd > 0 else { return }
+        let range = NSRange(location: 0, length: titleEnd)
+        storage.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: 22), range: range)
+        storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
+        storage.removeAttribute(.strikethroughStyle, range: range)
+    }
+
     private func applyLineStyle(_ line: String, range: NSRange, in storage: NSTextStorage) {
-        // Returns a range clamped to the line, starting at the line's origin.
         func prefix(_ n: Int) -> NSRange {
             NSRange(location: range.location, length: min(n, range.length))
         }
-        // Returns the sub-range after `offset` characters from the line start.
         func from(_ offset: Int) -> NSRange {
             let len = range.length - offset
             guard len > 0 else { return NSRange(location: range.location + offset, length: 0) }
@@ -286,7 +351,6 @@ final class MarkdownTextView: NSTextView {
             storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: prefix(2))
 
         } else if line.hasPrefix("- [x]") {
-            // Checked item: dim the bullet, green checkbox, strikethrough on the text.
             storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: prefix(2))
             let checkLen = min(3, range.length - 2)
             if checkLen > 0 {
@@ -301,7 +365,6 @@ final class MarkdownTextView: NSTextView {
             }
 
         } else if line.hasPrefix("- [ ]") {
-            // Unchecked item: dim the bullet, secondary color for the checkbox.
             storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: prefix(2))
             let checkLen = min(3, range.length - 2)
             if checkLen > 0 {
@@ -329,25 +392,25 @@ struct MarkdownEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let tv = MarkdownTextView(frame: NSRect(x: 0, y: 0, width: 500, height: 500))
-        tv.isEditable = true
+        tv.isEditable   = true
         tv.isSelectable = true
-        tv.isRichText = true
-        tv.allowsUndo = true
+        tv.isRichText   = true
+        tv.allowsUndo   = true
         tv.font = .systemFont(ofSize: NSFont.systemFontSize)
-        tv.textContainerInset = CGSize(width: 8, height: 8)
-        tv.isVerticallyResizable = true
+        tv.textContainerInset = CGSize(width: 16, height: 12)
+        tv.isVerticallyResizable   = true
         tv.isHorizontallyResizable = false
         tv.autoresizingMask = [.width]
         tv.minSize = NSSize(width: 0, height: 100)
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        tv.textContainer?.widthTracksTextView = true
+        tv.textContainer?.widthTracksTextView  = true
         tv.textContainer?.containerSize = NSSize(width: 500, height: CGFloat.greatestFiniteMagnitude)
         tv.isAutomaticQuoteSubstitutionEnabled = false
-        tv.isAutomaticDashSubstitutionEnabled = false
-        tv.textColor = .labelColor
+        tv.isAutomaticDashSubstitutionEnabled  = false
+        tv.textColor          = .labelColor
         tv.insertionPointColor = .labelColor
         tv.blobStore = blobStore
-        tv.delegate = context.coordinator
+        tv.delegate  = context.coordinator
 
         let coordinator = context.coordinator
         tv.afterChange = { [weak coordinator, weak tv] in
@@ -360,7 +423,7 @@ struct MarkdownEditor: NSViewRepresentable {
         let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 500))
         sv.borderType = .noBorder
         sv.hasVerticalScroller = true
-        sv.autohidesScrollers = true
+        sv.autohidesScrollers  = true
         sv.documentView = tv
         sv.autoresizingMask = [.width, .height]
 
@@ -406,9 +469,6 @@ struct MarkdownEditor: NSViewRepresentable {
 
 // MARK: - Markdown → NSAttributedString
 
-/// Parses a Markdown content string and builds an NSAttributedString.
-/// Segments matching `![alt](amadeuz://blob/id)` become BlobAttachment nodes.
-/// All other text is plain text with the system font.
 private func buildAttributedString(
     from md: String,
     blobStore: BlobStore,
@@ -425,14 +485,13 @@ private func buildAttributedString(
         return NSAttributedString(string: md, attributes: defaultAttrs)
     }
 
-    let nsmd = md as NSString
+    let nsmd      = md as NSString
     let fullRange = NSRange(location: 0, length: nsmd.length)
-    var lastEnd = 0
+    var lastEnd   = 0
 
     for match in regex.matches(in: md, range: fullRange) {
         let mRange = match.range
 
-        // Append any plain text preceding this match.
         if mRange.location > lastEnd {
             let txt = nsmd.substring(with: NSRange(location: lastEnd,
                                                    length: mRange.location - lastEnd))
@@ -440,17 +499,15 @@ private func buildAttributedString(
         }
 
         let blobID = nsmd.substring(with: match.range(at: 2))
-        let att = BlobAttachment(blobID: blobID)
+        let att    = BlobAttachment(blobID: blobID)
 
         if let cached = blobStore.cachedData(for: blobID), let img = NSImage(data: cached) {
-            // Already cached — show immediately.
             att.apply(image: img)
         } else {
-            // Show placeholder and load asynchronously.
             att.image = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
             Task { @MainActor in
                 guard let data = try? await blobStore.download(id: blobID),
-                      let img = NSImage(data: data) else { return }
+                      let img  = NSImage(data: data) else { return }
                 onImageLoaded(blobID, img)
             }
         }
@@ -462,7 +519,6 @@ private func buildAttributedString(
         lastEnd = mRange.location + mRange.length
     }
 
-    // Append any trailing plain text.
     if lastEnd < nsmd.length {
         result.append(NSAttributedString(string: nsmd.substring(from: lastEnd),
                                          attributes: defaultAttrs))

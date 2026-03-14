@@ -1958,3 +1958,80 @@ The Linux client and server are at feature parity for this milestone. The app ha
 > 📝 *Write here: what it felt like to finally get the auth navigation working after the StackPage name bug. Was the fix satisfying or frustrating — a simple one-line change that required understanding an obscure GTK/Blueprint distinction?*
 
 > 📝 *Write here: the offline mode decision — building software that doesn't require a server to be useful is a design principle, not just a feature. Did adding it feel like an afterthought or something that should have been there from day one?*
+
+---
+
+## March 14, 2026 — Rebuilding the macOS app: Apple Notes layout
+
+### The decision
+
+The macOS app was in `legacy-code/mac/` — a working Phase 2a implementation but using the old
+single-note-per-websocket architecture and a simpler UI. The Linux client had moved ahead:
+full auth, trash, offline mode, date-grouped note list, per-folder note counts, and a layout
+that actually looks like a polished native app.
+
+The goal for this session: bootstrap a fresh macOS client from scratch, using the Linux client
+as the feature reference and the actual Apple Notes app as the visual reference. The `notes/mac/`
+directory was empty (deleted files still in git staging).
+
+> 📝 *Write here: was looking at the screenshot of Apple Notes and comparing it with the old mac
+> app a bit of an embarrassment? The old version had a functional 3-column layout but the rows
+> were rough — no date grouping, no note counts on folders, no trash. It worked but it didn't
+> look like it belonged on a Mac.*
+
+### What was rebuilt
+
+All 11 source files were written fresh — none were carried over verbatim (though several are
+close to their legacy equivalents):
+
+- **Models.swift**: Added `deletedAt: Int64?` to `Note` and the `isTrashed` computed var. The
+  rest of the type system stayed the same. The `deleted_at` field round-trips through
+  `data.json` and the server API automatically via Codable.
+
+- **APIClient.swift**: Added `trashNote(id:)` and `restoreNote(id:)`. Both call `makeRequest`
+  with no body — `PATCH /notes/:id/trash` and `PATCH /notes/:id/restore` respectively. The
+  existing `makeRequest` already had `body` as optional, so this required no plumbing changes.
+
+- **NoteViewModel.swift**: Three new sentinel IDs (`allNotesID = "__all__"`, `trashID = "__trash__"`),
+  three new methods (`trashNote`, `restoreNote`, `permanentlyDeleteNote`), and the key addition:
+  `noteSections: [NoteSection]` — a computed property that groups `notesInSelectedFolder` into
+  Today / Previous 7 Days / Previous 30 Days / Older using `Calendar`. Sections with no notes
+  are filtered out. Also added `allNotesCount`, `trashCount`, `noteCount(for:)` for the sidebar
+  badges.
+
+- **ContentView.swift**: The biggest change. `FolderSidebar` now shows note count badges on
+  every row using SwiftUI's `.badge()` modifier. The trash section is a `Section {}` at the
+  bottom — no section header, just the "Recently Deleted" row. `NoteList` iterates `vm.noteSections`
+  with `ForEach(section.notes)` inside each `Section(section.title)`. Context menus are
+  context-aware: trash view shows Restore / Delete Permanently, normal view shows Move to Folder /
+  Move to Trash. `NoteRow` is the most visually different from the legacy version: bold title,
+  then date + preview on the same line with different text styles, then a small folder label.
+  `NoteEditor` adds the centered date stamp at the top.
+
+### The date formatting detail
+
+Looking at the Apple Notes screenshot: note rows show "Thursday" for notes from earlier this week,
+and "09/02/2026" for older notes. Getting this right required checking whether the note's date
+falls within the current calendar week (via `dateComponents([.yearForWeekOfYear, .weekOfYear])`),
+not just within 7 days. A note from last Sunday is "Last Week" in casual speech but technically
+within 7 days — the week boundary feels more natural.
+
+### Build result
+
+`swift build` completed clean on the first attempt. No surprises — the Swift type system
+caught everything at compile time, and all the async patterns from the legacy code carried over
+unchanged. The debounce via `Publishers.CombineLatest` + `.debounce` is particularly clean
+compared to what most platforms need to do for the same thing.
+
+### Where things stand
+
+The macOS client is now at full feature parity with the Linux client for this milestone: Apple
+Notes-style layout, date-grouped note list, folder counts, trash with soft delete / restore /
+permanent delete, inline images, Markdown styling, auth, offline-first sync. The matrix now
+shows macOS ✅ for trash.
+
+> 📝 *Write here: compare writing SwiftUI to the GTK4/Rust work. SwiftUI's `.badge()`,
+> `NavigationSplitView`, and the `Section` type in `List` make the sidebar and grouped list
+> almost embarrassingly easy to implement compared to the GTK equivalent. But the Markdown
+> editor — NSTextView with custom attachment handling — is genuinely tricky and not something
+> SwiftUI gives you for free.*

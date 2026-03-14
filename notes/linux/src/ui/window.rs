@@ -701,6 +701,9 @@ impl AmzWindow {
         imp.text_view.buffer().set_text(&combined);
         *imp.loading_note.borrow_mut() = false;
 
+        // Download any blobs referenced in this note that aren't in the local cache.
+        self.prefetch_blobs(&combined);
+
         mgr.borrow_mut().connect_note_ws(note_id);
         imp.inner_split.set_show_content(true);
         imp.text_view.grab_focus();
@@ -1034,10 +1037,10 @@ impl AmzWindow {
         let clipboard = WidgetExt::display(self).clipboard();
         let formats = clipboard.formats();
 
-        let note_id = self.imp().manager.borrow()
+        let Some(_note_id) = self.imp().manager.borrow()
             .as_ref()
-            .and_then(|m| m.borrow().selected_note_id.clone());
-        let Some(note_id) = note_id else { return false };
+            .and_then(|m| m.borrow().selected_note_id.clone())
+        else { return false };
 
         // ── Case 1: file(s) copied from file manager ──────────────────────
         if formats.contains_type(gdk::FileList::static_type()) {
@@ -1054,9 +1057,11 @@ impl AmzWindow {
                     for file in file_list.files() {
                         let Some(path) = file.path() else { continue };
                         if !md_formatter::is_image_file(&path) { continue }
-                        let Some(uri) = md_formatter::copy_image_to_note(&note_id, &path) else { continue };
+                        let Ok(data) = std::fs::read(&path) else { continue };
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
                         let alt = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
-                        buf.insert_at_cursor(&format!("\n![{}]({})\n", alt, uri));
+                        let Some(blob_id) = win.save_blob_and_upload(data, ext) else { continue };
+                        buf.insert_at_cursor(&format!("\n![{}](amadeuz://blob/{})\n", alt, blob_id));
                     }
                 },
             );
@@ -1071,22 +1076,79 @@ impl AmzWindow {
                 move |result: Result<Option<gdk::Texture>, glib::Error>| {
                     let Ok(Some(texture)) = result else { return };
                     let Some(win) = win_weak.upgrade() else { return };
-                    let dir = md_formatter::image_store_dir(&note_id);
-                    if std::fs::create_dir_all(&dir).is_err() { return }
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0);
-                    let filename = format!("{}.png", ts);
-                    if texture.save_to_png(dir.join(&filename)).is_err() { return }
-                    let uri = format!("amz-image://{}", filename);
-                    win.imp().text_view.buffer().insert_at_cursor(&format!("\n![image]({})\n", uri));
+                    // Save texture to a temp file so we can read raw PNG bytes.
+                    let tmp = std::env::temp_dir().join(format!("amz_paste_{}.png",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos()).unwrap_or(0)));
+                    if texture.save_to_png(&tmp).is_err() { return }
+                    let Ok(data) = std::fs::read(&tmp) else { return };
+                    let _ = std::fs::remove_file(&tmp);
+                    let Some(blob_id) = win.save_blob_and_upload(data, "png") else { return };
+                    win.imp().text_view.buffer()
+                        .insert_at_cursor(&format!("\n![image](amadeuz://blob/{})\n", blob_id));
                 },
             );
             return true;
         }
 
         false
+    }
+
+    /// For each `amadeuz://blob/{id}` in `content` that isn't cached locally,
+    /// download it from the server and save to the blob cache, then trigger
+    /// a re-embed so the image appears without any user action.
+    fn prefetch_blobs(&self, content: &str) {
+        let ids = md_formatter::blob_ids_in_content(content);
+        let missing: Vec<String> = ids.into_iter()
+            .filter(|id| !md_formatter::blob_cache_path(id).exists())
+            .collect();
+        if missing.is_empty() { return; }
+
+        let api = match self.imp().manager.borrow().as_ref().map(|m| m.borrow().api.clone()) {
+            Some(api) if api.token.is_some() => api,
+            _ => return,
+        };
+        let win_weak = self.downgrade();
+        crate::spawn(async move {
+            for id in missing {
+                if let Ok(data) = api.download_blob(&id).await {
+                    let path = md_formatter::blob_cache_path(&id);
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent).ok();
+                    }
+                    std::fs::write(&path, &data).ok();
+                }
+            }
+            // Back on GTK main thread — trigger a re-embed now that blobs are cached.
+            glib::idle_add_once(move || {
+                if let Some(win) = win_weak.upgrade() {
+                    win.schedule_image_embed();
+                }
+            });
+        });
+    }
+
+    /// Save image bytes to the local blob cache and kick off an async upload
+    /// to the server. Returns the blob ID on success.
+    fn save_blob_and_upload(&self, data: Vec<u8>, _ext: &str) -> Option<String> {
+        let blob_id = uuid::Uuid::new_v4().to_string();
+        let cache_path = md_formatter::blob_cache_path(&blob_id);
+        std::fs::create_dir_all(cache_path.parent()?).ok()?;
+        std::fs::write(&cache_path, &data).ok()?;
+
+        // Async upload — fire-and-forget, same pattern as note saves.
+        let api = self.imp().manager.borrow()
+            .as_ref()
+            .map(|m| m.borrow().api.clone());
+        if let Some(api) = api {
+            let id = blob_id.clone();
+            crate::spawn(async move {
+                api.upload_blob(&id, data).await.ok();
+            });
+        }
+
+        Some(blob_id)
     }
 
     // ── Image embedding ───────────────────────────────────────────────────────
@@ -1359,9 +1421,11 @@ impl AmzWindow {
                     for file in file_list.files() {
                         let Some(path) = file.path() else { continue };
                         if !md_formatter::is_image_file(&path) { continue }
-                        let Some(uri) = md_formatter::copy_image_to_note(&note_id, &path) else { continue };
+                        let Ok(data) = std::fs::read(&path) else { continue };
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
                         let alt = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
-                        buf.insert_at_cursor(&format!("\n![{}]({})\n", alt, uri));
+                        let Some(blob_id) = win.save_blob_and_upload(data, ext) else { continue };
+                        buf.insert_at_cursor(&format!("\n![{}](amadeuz://blob/{})\n", alt, blob_id));
                         handled = true;
                     }
                     handled

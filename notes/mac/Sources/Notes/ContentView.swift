@@ -16,7 +16,7 @@ struct ContentView: View {
                 } detail: {
                     NoteEditor(vm: vm, showSettings: $showSettings)
                 }
-                .searchable(text: $vm.searchText, placement: .toolbar, prompt: "Search notes")
+                .searchable(text: $vm.searchText, placement: .toolbar, prompt: "Search")
                 .sheet(isPresented: $showSettings) {
                     SettingsView(vm: vm)
                 }
@@ -24,7 +24,6 @@ struct ContentView: View {
                 AuthView(vm: vm)
             }
         }
-        // Shown after register/recover regardless of which view is active.
         .sheet(item: Binding(
             get: { vm.pendingRecoveryCode.map { RecoveryCodePresentation(code: $0) } },
             set: { if $0 == nil { vm.pendingRecoveryCode = nil } }
@@ -38,33 +37,58 @@ struct ContentView: View {
 
 private struct FolderSidebar: View {
     @ObservedObject var vm: NotesViewModel
-    @State private var showNewFolder = false
-    @State private var newFolderName = ""
+    @State private var showNewFolder  = false
+    @State private var newFolderName  = ""
     @State private var renamingFolder: Folder?
-    @State private var renameText = ""
+    @State private var renameText     = ""
 
     var body: some View {
         List(selection: $vm.selectedFolderID) {
-            Label("All Notes", systemImage: "tray.2.fill")
-                .tag(NotesViewModel.allNotesID)
 
+            // All Notes — always at top
+            Label {
+                Text("All Notes")
+            } icon: {
+                Image(systemName: "tray.2.fill")
+                    .foregroundStyle(.yellow)
+            }
+            .badge(vm.allNotesCount)
+            .tag(NotesViewModel.allNotesID)
+
+            // User folders
             if !vm.folders.isEmpty {
                 Section("Folders") {
                     ForEach(vm.folders) { folder in
-                        Text(folder.name)
-                            .tag(folder.id)
-                            .contextMenu {
-                                Button("Rename…") {
-                                    renamingFolder = folder
-                                    renameText = folder.name
-                                }
-                                Divider()
-                                Button("Delete Folder", role: .destructive) {
-                                    vm.deleteFolder(id: folder.id)
-                                }
+                        Label {
+                            Text(folder.name)
+                        } icon: {
+                            Image(systemName: "folder")
+                        }
+                        .badge(vm.noteCount(for: folder.id))
+                        .tag(folder.id)
+                        .contextMenu {
+                            Button("Rename…") {
+                                renamingFolder = folder
+                                renameText = folder.name
                             }
+                            Divider()
+                            Button("Delete Folder", role: .destructive) {
+                                vm.deleteFolder(id: folder.id)
+                            }
+                        }
                     }
                 }
+            }
+
+            // Trash — always at bottom
+            Section {
+                Label {
+                    Text("Recently Deleted")
+                } icon: {
+                    Image(systemName: "trash")
+                }
+                .badge(vm.trashCount)
+                .tag(NotesViewModel.trashID)
             }
         }
         .onChange(of: vm.selectedFolderID) { _, _ in
@@ -82,7 +106,7 @@ private struct FolderSidebar: View {
             .buttonStyle(.plain)
             .background(.bar)
         }
-        .navigationTitle("Folders")
+        .navigationTitle("Notes")
         .alert("New Folder", isPresented: $showNewFolder) {
             TextField("Folder name", text: $newFolderName)
             Button("Create") {
@@ -116,53 +140,82 @@ private struct NoteList: View {
 
     var body: some View {
         Group {
-            if vm.notesInSelectedFolder.isEmpty {
-                ContentUnavailableView("No Notes", systemImage: "note.text")
+            if vm.noteSections.isEmpty {
+                ContentUnavailableView(
+                    vm.isTrashView ? "No Deleted Notes" : "No Notes",
+                    systemImage: vm.isTrashView ? "trash" : "note.text"
+                )
             } else {
-                List(vm.notesInSelectedFolder, selection: $vm.selectedNoteID) { note in
-                    NoteRow(note: note, folderName: vm.folders.first { $0.id == note.folderID }?.name)
-                        .contextMenu {
-                            Menu("Move to Folder") {
-                                Button("No Folder") {
-                                    vm.moveNote(id: note.id, toFolderID: nil)
-                                }
-                                if !vm.folders.isEmpty {
-                                    Divider()
-                                    ForEach(vm.folders) { folder in
-                                        Button(folder.name) {
-                                            vm.moveNote(id: note.id, toFolderID: folder.id)
+                List(selection: $vm.selectedNoteID) {
+                    ForEach(vm.noteSections) { section in
+                        Section(section.title) {
+                            ForEach(section.notes) { note in
+                                NoteRow(
+                                    note: note,
+                                    folderName: vm.folders.first { $0.id == note.folderID }?.name,
+                                    isTrashView: vm.isTrashView
+                                )
+                                .tag(note.id)
+                                .contextMenu {
+                                    if vm.isTrashView {
+                                        Button("Restore") {
+                                            vm.restoreNote(id: note.id)
+                                        }
+                                        Divider()
+                                        Button("Delete Permanently", role: .destructive) {
+                                            vm.permanentlyDeleteNote(id: note.id)
+                                        }
+                                    } else {
+                                        Menu("Move to Folder") {
+                                            Button("No Folder") {
+                                                vm.moveNote(id: note.id, toFolderID: nil)
+                                            }
+                                            if !vm.folders.isEmpty {
+                                                Divider()
+                                                ForEach(vm.folders) { folder in
+                                                    Button(folder.name) {
+                                                        vm.moveNote(id: note.id, toFolderID: folder.id)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Divider()
+                                        Button("Move to Trash", role: .destructive) {
+                                            vm.trashNote(id: note.id)
                                         }
                                     }
                                 }
                             }
-                            Divider()
-                            Button("Delete Note", role: .destructive) {
-                                vm.deleteNote(id: note.id)
-                            }
                         }
+                    }
                 }
                 .onChange(of: vm.selectedNoteID) { old, new in
                     vm.noteSelectionChanged(from: old, to: new)
                 }
             }
         }
-        .navigationTitle(vm.selectedFolderID == NotesViewModel.allNotesID
-            ? "All Notes"
-            : (vm.selectedFolder?.name ?? "Notes"))
+        .navigationTitle(vm.currentFolderTitle)
+        .navigationSubtitle(vm.currentFolderSubtitle)
         .toolbar {
-            ToolbarItem {
-                Button(role: .destructive) {
-                    if let id = vm.selectedNoteID { vm.deleteNote(id: id) }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    vm.createNote()
                 } label: {
-                    Label("Delete Note", systemImage: "trash")
-                }
-                .disabled(vm.selectedNoteID == nil)
-            }
-            ToolbarItem {
-                Button { vm.createNote() } label: {
                     Label("New Note", systemImage: "square.and.pencil")
                 }
-                .disabled(vm.selectedFolderID == nil)
+                .disabled(vm.selectedFolderID == nil || vm.isTrashView)
+            }
+
+            if vm.isTrashView && !vm.noteSections.isEmpty {
+                ToolbarItem {
+                    Button("Empty Trash", role: .destructive) {
+                        for section in vm.noteSections {
+                            for note in section.notes {
+                                vm.permanentlyDeleteNote(id: note.id)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -173,9 +226,10 @@ private struct NoteList: View {
 private struct NoteRow: View {
     let note: Note
     let folderName: String?
+    let isTrashView: Bool
 
     private var displayTitle: String {
-        note.title.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : note.title
+        note.title.trimmingCharacters(in: .whitespaces).isEmpty ? "New Note" : note.title
     }
 
     private var preview: String {
@@ -183,7 +237,7 @@ private struct NoteRow: View {
             .replacingOccurrences(of: #"!\[[^\]]*\]\(amadeuz://blob/[a-f0-9\-]+\)"#,
                                   with: "",
                                   options: .regularExpression)
-            .replacingOccurrences(of: #"\n{2,}"#, with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? "No additional text" : text
     }
@@ -191,32 +245,42 @@ private struct NoteRow: View {
     private var dateString: String {
         let date = Date(timeIntervalSince1970: Double(note.updatedAt) / 1000)
         let cal  = Calendar.current
+
         if cal.isDateInToday(date) {
             return date.formatted(date: .omitted, time: .shortened)
-        } else if cal.isDateInYesterday(date) {
-            return "Yesterday"
-        } else {
-            return date.formatted(.dateTime.month(.abbreviated).day().year())
         }
+
+        // Within the current week → day name
+        let startOfWeek = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: Date()))
+        if let sow = startOfWeek, date >= sow {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "EEEE"
+            return fmt.string(from: date)
+        }
+
+        // Older: DD/MM/YYYY
+        return date.formatted(.dateTime.day(.twoDigits).month(.twoDigits).year())
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Text(displayTitle)
-                    .font(.headline)
-                    .lineLimit(1)
-                Spacer()
+            Text(displayTitle)
+                .font(.headline)
+                .lineLimit(1)
+
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(dateString)
-                    .font(.caption2)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .layoutPriority(1)
+                Text(preview)
+                    .font(.subheadline)
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
-            Text(preview)
+
+            Label(folderName ?? "Notes", systemImage: "folder")
                 .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            Label(folderName ?? "—", systemImage: "folder")
-                .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
         }
@@ -230,22 +294,37 @@ private struct NoteEditor: View {
     @ObservedObject var vm: NotesViewModel
     @Binding var showSettings: Bool
 
+    private var selectedNote: Note? {
+        vm.notes.first { $0.id == vm.selectedNoteID }
+    }
+
+    private var noteDateString: String? {
+        guard let note = selectedNote else { return nil }
+        let date = Date(timeIntervalSince1970: Double(note.updatedAt) / 1000)
+        let fmt  = DateFormatter()
+        fmt.dateStyle = .long
+        fmt.timeStyle = .short
+        return fmt.string(from: date)
+    }
+
     var body: some View {
         Group {
             if vm.selectedNoteID == nil {
                 ContentUnavailableView("Select a Note", systemImage: "note.text")
             } else {
                 VStack(alignment: .leading, spacing: 0) {
-                    TextField("Title", text: $vm.editingTitle)
-                        .font(.title2.bold())
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 20)
-                        .padding(.bottom, 10)
+                    // Date stamp centered at top
+                    if let dateStr = noteDateString {
+                        Text(dateStr)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.top, 14)
+                            .padding(.bottom, 4)
+                    }
 
-                    Divider()
-
-                    MarkdownEditor(markdown: $vm.editingContent, blobStore: vm.blobStore)
+                    // Single body editor — first line is the title
+                    MarkdownEditor(markdown: $vm.editingBody, blobStore: vm.blobStore)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .background(.windowBackground)

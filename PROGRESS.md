@@ -52,7 +52,7 @@
 | REST CRUD API | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 | Per-note WebSocket (live sync) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 | Sign Out | — | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Trash (soft delete / restore / delete permanently) | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Trash (soft delete / restore / delete permanently) | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 | Offline mode (no account, persisted choice) | — | ❌ | ❌ | ✅ | ❌ | ❌ |
 | Welcome / onboarding screen | — | ❌ | ❌ | ✅ | ❌ | ❌ |
 | Image paste from clipboard (screenshots, web) | — | ❌ | ❌ | ✅ | ❌ | ❌ |
@@ -163,7 +163,7 @@ server/
 
 ## macOS (Swift + SwiftUI)
 
-**Status:** Phase 2a complete — user accounts, JWT auth, REST sync, per-note WebSocket live sync, recovery codes.
+**Status:** Phase 2c complete — Apple Notes-style layout, trash, date grouping, note counts, full feature parity with Linux client.
 **Location:** `notes/mac/`
 **Run:** `cd notes/mac && swift run`
 **Requires:** Xcode command-line tools + accepted license (`sudo xcodebuild -license`)
@@ -172,15 +172,20 @@ server/
 
 - Login / Register / Recover screen with segmented control (shown before main UI)
 - Recovery code displayed in a sheet after register or recover — shown once, copy button provided
-- Three-column `NavigationSplitView`: folder list | note list | note editor (shown after login)
-- Sign Out accessible from app menu (macOS menu bar → Notes → Sign Out); disabled when not logged in
+- **Apple Notes-style three-column `NavigationSplitView`**: folder sidebar | note list with date grouping | note editor
+- **Folder sidebar**: "All Notes" (with total note count badge) → user folders (with per-folder count badges) → "Recently Deleted" (trash, with count badge). "New Folder" button pinned at bottom
+- **Note list with date grouping**: sections "Today", "Previous 7 Days", "Previous 30 Days", "Older" — auto-computed from `updatedAt` timestamps
+- **Note rows**: bold title + (date + content preview on one line) + folder label — matches Apple Notes visual style
+- **Note editor**: date stamp centered at top (e.g. "12 March 2026 at 17:20"), then title field, then body
+- **Trash (soft delete)**: right-click note → "Move to Trash". Trash view shows Restore / Delete Permanently context menu. "Empty Trash" toolbar button when trash has notes
+- Sign Out accessible from app menu (macOS menu bar → Notes → Sign Out)
+- Cmd+N creates a new note in the current folder
 - All CRUD (folders, notes) via REST; 500 ms debounced note content changes via REST PATCH
 - Per-note WebSocket opens when a note is selected — receives live updates from other clients
 - Full sync on login/reconnect: merges server state with local by last-write-wins, pushes any offline-created or locally-newer items
 - Offline-first: local state updated immediately; REST calls fire in background; full sync on reconnect catches up
 - JWT stored in macOS Keychain; survives app restart without re-login
-- Server address format: `http://localhost:8080` (old `ws://` format auto-migrated on first launch)
-- Inline images (drag & drop / paste), Markdown styling, offline blob queue — unchanged from Phase 2b
+- Inline images (drag & drop / paste), Markdown styling (headers, bullets, checkboxes), offline blob queue
 
 ### Local storage
 
@@ -188,6 +193,8 @@ server/
 ```json
 { "folders": [...], "notes": [...] }
 ```
+
+Note model includes `deleted_at` (Int64, optional) for trash state.
 
 ### Settings storage
 
@@ -197,23 +204,31 @@ server/
 
 | File | Role |
 |------|------|
-| `NoteApp.swift` | `@main` entry; `@StateObject vm` owned here; `.commands` adds Sign Out to app menu |
+| `NoteApp.swift` | `@main` entry; `@StateObject vm`; `.commands` adds Sign Out + Cmd+N |
 | `AuthView.swift` | Login / Register / Recover UI; `RecoveryCodeView` sheet |
 | `KeychainStore.swift` | Save, load, delete JWT from macOS Keychain |
-| `APIClient.swift` | All REST calls + WebSocket URL builder; `APIError` carries server message |
-| `Models.swift` | `Folder`, `Note`, `AuthResponse`, `NoteWsMsg` |
-| `ContentView.swift` | Auth gate; `NavigationSplitView`; recovery code sheet at root level |
-| `NoteViewModel.swift` | `@MainActor NotesViewModel` — auth state, `fullSync()`, REST CRUD, per-note WS lifecycle |
+| `APIClient.swift` | All REST calls + WebSocket URL builder; `trashNote`, `restoreNote` |
+| `Models.swift` | `Folder`, `Note` (with `deletedAt`), `AuthResponse`, `NoteWsMsg` |
+| `ContentView.swift` | Auth gate; Apple Notes 3-column layout; `FolderSidebar`, `NoteList`, `NoteEditor`, `SettingsView` |
+| `NoteViewModel.swift` | `@MainActor NotesViewModel` — auth, `fullSync()`, CRUD, trash/restore, date sections |
 | `SyncService.swift` | `NoteSync` — per-note WebSocket, receive-only (init + update), auto-reconnect |
 | `BlobStore.swift` | Local blob cache, pending upload queue, authenticated `PUT /blobs/:id` |
 | `LocalStore.swift` | Read/write `data.json` (folders + notes) in Application Support |
 | `MarkdownEditor.swift` | `NSTextView`-based rich editor: inline images (paste/drop), Markdown styling |
+
+### Virtual folder sentinels
+
+| Sentinel | Meaning |
+|----------|---------|
+| `"__all__"` | All Notes — shows all active (non-trashed) notes |
+| `"__trash__"` | Recently Deleted — shows notes where `deletedAt != nil` |
 
 ### Known quirks
 
 - SPM executables don't activate as foreground apps by default. Fixed with `AppDelegate`:
   `NSApp.setActivationPolicy(.regular)` + `NSApp.activate(ignoringOtherApps: true)`
 - Recovery code sheet is attached to `ContentView`'s root view (not `AuthView`) so it survives the auth state transition that removes `AuthView` from the hierarchy
+- Trash state is persisted locally in `data.json` via `deleted_at` field; syncs with server via `PATCH /notes/:id/trash` and `PATCH /notes/:id/restore`
 
 ---
 

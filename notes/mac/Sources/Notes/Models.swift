@@ -20,12 +20,16 @@ struct Note: Codable, Identifiable, Equatable {
     var content: String
     var updatedAt: Int64
     let createdAt: Int64
+    var deletedAt: Int64?
+
+    var isTrashed: Bool { deletedAt != nil }
 
     enum CodingKeys: String, CodingKey {
         case id, title, content
         case folderID  = "folder_id"
         case updatedAt = "updated_at"
         case createdAt = "created_at"
+        case deletedAt = "deleted_at"
     }
 }
 

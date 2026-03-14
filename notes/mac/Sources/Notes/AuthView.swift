@@ -7,7 +7,8 @@ struct AuthView: View {
     @State private var password     = ""
     @State private var recoveryCode = ""
     @State private var newPassword  = ""
-    @State private var isLoading = false
+    @State private var isLoading    = false
+    @State private var serverDraft  = ""
 
     enum Mode: String, CaseIterable {
         case login    = "Sign In"
@@ -64,9 +65,29 @@ struct AuthView: View {
             .buttonStyle(.borderedProminent)
             .disabled(isLoading || !formIsValid)
             .keyboardShortcut(.defaultAction)
+
+            Divider()
+
+            HStack(spacing: 6) {
+                Image(systemName: "server.rack")
+                    .foregroundStyle(.tertiary)
+                    .font(.caption)
+                TextField("http://hostname:8080", text: $serverDraft)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .onSubmit { applyServer() }
+            }
         }
         .padding(32)
         .frame(width: 320)
+        .onAppear { serverDraft = vm.serverAddress }
+    }
+
+    private func applyServer() {
+        let normalized = NotesViewModel.normalizeServerAddress(serverDraft)
+        serverDraft = normalized
+        vm.serverAddress = normalized
     }
 
     private var formIsValid: Bool {
@@ -78,6 +99,7 @@ struct AuthView: View {
     }
 
     private func submit() {
+        applyServer()
         isLoading = true
         Task {
             switch mode {

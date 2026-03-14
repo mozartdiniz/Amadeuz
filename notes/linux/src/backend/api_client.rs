@@ -212,6 +212,32 @@ impl ApiClient {
         self.delete(&format!("/notes/{id}")).await
     }
 
+    // ── Blobs ─────────────────────────────────────────────────────────────────
+
+    pub async fn upload_blob(&self, id: &str, data: Vec<u8>) -> Result<(), ApiError> {
+        let url = format!("{}/blobs/{}", self.base_url, id);
+        let mut req = self.http.put(&url).body(data);
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+        let resp = req.send().await?;
+        match resp.status() {
+            s if s.is_success() => Ok(()),
+            StatusCode::UNAUTHORIZED => Err(ApiError::Unauthorized),
+            s => Err(ApiError::Server(s.as_u16())),
+        }
+    }
+
+    pub async fn download_blob(&self, id: &str) -> Result<Vec<u8>, ApiError> {
+        let url = format!("{}/blobs/{}", self.base_url, id);
+        let resp = self.http.get(&url).send().await?;
+        match resp.status() {
+            s if s.is_success() => Ok(resp.bytes().await?.to_vec()),
+            StatusCode::NOT_FOUND => Err(ApiError::NotFound),
+            s => Err(ApiError::Server(s.as_u16())),
+        }
+    }
+
     // ── HTTP helpers ──────────────────────────────────────────────────────────
 
     fn auth_header(&self) -> Option<String> {
