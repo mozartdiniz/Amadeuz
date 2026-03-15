@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Notes",
-            path: "Sources/Notes"
+            path: "Sources/Notes",
+            resources: [.process("Assets.xcassets")]
         )
     ]
 )

@@ -21,6 +21,9 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 # Copy binary
 cp "$BUILD_DIR/Notes" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
+# Copy icon
+cp "$SCRIPT_DIR/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+
 # Write Info.plist
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -50,6 +53,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <string>NSApplication</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
     <key>NSAppTransportSecurity</key>
