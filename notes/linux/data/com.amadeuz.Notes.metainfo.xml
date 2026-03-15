@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.amadeuz.Notes</id>
+  <name>Amadeuz Notes</name>
+  <summary>Sync notes across your devices</summary>
+  <description>
+    <p>
+      A native notes app with real-time cloud sync, part of the Amadeuz
+      self-hosted iCloud replacement project.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.amadeuz.Notes.desktop</launchable>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <content_rating type="oars-1.1"/>
+</component>

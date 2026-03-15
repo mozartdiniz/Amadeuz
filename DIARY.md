@@ -2595,3 +2595,91 @@ the Electron equivalent.
 
 Next: scaffold the Electron project at `notes/windows-electron/` and start with the 
 foundation — main process setup, IPC bridge, data storage, and auth before any UI work.
+
+---
+
+## March 15, 2026 — App icon and Flatpak packaging for Linux
+
+### App icon
+
+The Linux client had no icon. Added `simple_notebook.png` (from the project-level `icons/` directory)
+to the Meson build as `data/icons/hicolor/256x256/apps/com.amadeuz.Notes.png` — the file must be
+named after the app ID for GTK to find it automatically from the application ID property.
+
+Two small issues surfaced. First, `gtk::Window::set_default_icon_name` was added to `main.rs` as a
+fallback for dev runs — but it panics if called before GTK is initialized, which it was. Removed.
+The installed icon via the hicolor theme is sufficient; the app ID on `adw::Application` makes GTK
+look it up automatically. Second, `gnome.post_install` needed `gtk_update_icon_cache: true` added
+alongside the existing `glib_compile_schemas` to rebuild the icon theme cache on install.
+
+The source image is 1536×1024 — non-square, landscape. GTK scales it down to fit a square icon slot,
+so it looks slightly letterboxed. Good enough for now; a proper square icon would fix this later.
+
+### Flatpak packaging
+
+The goal: install the Linux client as a real sandboxed app visible in the GNOME Shell app grid,
+isolated from the dev environment.
+
+The build system is already Meson + Cargo, and the GNOME 49 SDK was already installed. The Flatpak
+manifest (`com.amadeuz.Notes.yaml`) is straightforward: `org.gnome.Platform//49` as runtime,
+`org.freedesktop.Sdk.Extension.rust-stable//25.08` for the Rust toolchain, `blueprint-compiler`
+built from source (it is not in the SDK), and the app built with Meson.
+
+The `finish-args` needed thought: `--share=network` for the WebSocket sync connection,
+`--talk-name=org.freedesktop.secrets` for the libsecret keyring where JWTs are stored,
+plus the standard Wayland/X11/DRI set.
+
+### The cargo offline problem — two failed approaches before the right one
+
+Getting Cargo to build without network inside the Flatpak sandbox was harder than expected.
+
+**Attempt 1: `flatpak-cargo-generator.py`** — the documented approach for GNOME Rust apps.
+The tool reads `Cargo.lock` and generates a `cargo-sources.json` listing every crate as a Flatpak
+source. Flatpak downloads them before the sandbox starts, cargo uses them offline. Problem: the
+generator puts `.crate` archives into a cargo registry cache directory, but cargo in offline mode
+also needs the registry *index* — the metadata that tells it what versions and checksums exist.
+The generator does not produce the index. Result: "no matching package named `anyhow` found" with
+`CARGO_NET_OFFLINE=true` set, even though the crate archive was present.
+
+Along the way: the `CARGO_HOME` path also needed fixing. `src/meson.build` pointed CARGO_HOME at
+`meson.project_build_root() / 'cargo-home'` (the build directory). Flatpak puts the downloaded
+sources in the *source* directory. The two paths diverge inside the sandbox. A meson option
+`-Dcargo-home` was added to override the path — and then removed once we abandoned this approach.
+
+**Attempt 2: `cargo vendor`** — the correct approach.
+`cargo vendor vendor/` fetches all dependencies as full source trees (not registry caches) and
+writes a `.cargo/config.toml` that redirects `crates-io` to `directory = "vendor"`. Cargo needs
+no index, no network, no registry. The `vendor/` directory lives next to the source and is included
+automatically via the `type: dir` source in the manifest. The sandbox build is purely local from
+that point on. This is how production GNOME Rust apps (Fractal, etc.) do it.
+
+The build script runs `cargo vendor` on the host before invoking `flatpak-builder`. `vendor/` and
+`.cargo/` are gitignored; `Cargo.lock` is now committed (it was previously gitignored — an error,
+since Flatpak reproducibility requires a locked dependency tree for applications).
+
+### Missing .desktop file
+
+After a successful build and install, the app did not appear in the GNOME Shell app grid. The
+build log had the answer: "No appstream data... No such file or directory: /files/share/app-info".
+
+GNOME Shell reads `.desktop` files to populate the app grid. Without one, the binary exists but
+is invisible to the launcher. Added `com.amadeuz.Notes.desktop` (named after the app ID, required)
+to `data/meson.build` with `install_dir: datadir / 'applications'`. Also added
+`com.amadeuz.Notes.metainfo.xml` for AppStream metadata, which suppresses the flatpak-builder
+warning and is required for any eventual Flathub submission.
+
+The `StartupWMClass` field in the desktop entry ensures GNOME correctly groups running windows with
+the launcher icon.
+
+After the rebuild, the app appeared in the GNOME app grid and launched correctly.
+
+> 📝 *Write here: what was it like seeing the app appear in the app grid for the first time as
+> a "real" installed application? Does it feel different from running it in the terminal?
+> The Flatpak sandboxing — is that something you thought about consciously or did it just come
+> along with the packaging work?*
+
+### Where things stand
+
+The Linux client is now a proper installable application on Fedora. `./build-flatpak.sh` from the
+`notes/linux/` directory handles everything: prerequisite installation, cargo vendoring, and Flatpak
+build + install. Subsequent rebuilds are incremental (cargo + flatpak-builder both cache aggressively).

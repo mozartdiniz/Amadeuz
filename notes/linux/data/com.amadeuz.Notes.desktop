@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Amadeuz Notes
+Comment=Sync notes across your devices
+Exec=amadeuz-notes
+Icon=com.amadeuz.Notes
+Terminal=false
+Type=Application
+Categories=Office;TextEditor;
+StartupWMClass=com.amadeuz.Notes

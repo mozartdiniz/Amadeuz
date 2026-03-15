@@ -48,7 +48,13 @@ Desktop.ini
 # ── Rust / Linux client ───────────────────────────────────────────────────────
 target/
 notes/linux/build/
-notes/linux/Cargo.lock
+notes/linux/builddir/
+# Cargo.lock is intentionally committed for apps (needed for reproducible Flatpak builds)
+
+# ── Flatpak build artifacts ───────────────────────────────────────────────────
+notes/linux/.flatpak-build/
+notes/linux/vendor/
+notes/linux/.cargo/
 
 
 # ── Others ────────────────────────────────────────────────────────────────────

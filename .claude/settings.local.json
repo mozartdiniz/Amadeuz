@@ -97,7 +97,10 @@
       "Bash(Remove-Item -Recurse -Force \"C:\\\\Users\\\\user\\\\.nuget\\\\packages\\\\wpf.ui\" 2>&1; echo \"done\")",
       "Bash(rm:*)",
       "Bash(cd:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(file:*)",
+      "Bash(flatpak:*)",
+      "Bash(blueprint-compiler:*)"
     ]
   }
 }

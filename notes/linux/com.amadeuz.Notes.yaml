@@ -1,0 +1,36 @@
+app-id: com.amadeuz.Notes
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: amadeuz-notes
+
+finish-args:
+  - --share=network           # WebSocket sync with the server
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc               # required for X11
+  - --device=dri              # GPU acceleration
+  - --talk-name=org.freedesktop.secrets  # libsecret keyring (auth token)
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    RUST_BACKTRACE: '1'
+
+modules:
+  - name: blueprint-compiler
+    buildsystem: meson
+    sources:
+      - type: git
+        url: https://gitlab.gnome.org/jwestman/blueprint-compiler.git
+        tag: v0.18.0
+
+  - name: amadeuz-notes
+    buildsystem: meson
+    config-opts:
+      - -Dprofile=default
+    sources:
+      - type: dir
+        path: .

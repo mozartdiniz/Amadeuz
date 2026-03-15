@@ -354,10 +354,10 @@ Default server: `http://localhost:8080`
 
 ### Build
 
+**Dev build (local, not sandboxed):**
 ```bash
 # Install dependencies (Fedora)
 sudo dnf install meson cargo rust libadwaita-devel libsecret-devel blueprint-compiler
-# (gtk4-devel is already installed on Fedora 43)
 
 cd notes/linux
 meson setup build --prefix=$HOME/.local -Dprofile=development
@@ -369,6 +369,18 @@ glib-compile-schemas ~/.local/share/glib-2.0/schemas/
 GSETTINGS_SCHEMA_DIR=~/.local/share/glib-2.0/schemas ~/.local/bin/amadeuz-notes
 ```
 
+**Flatpak build (sandboxed, appears in GNOME app launcher):**
+```bash
+cd notes/linux
+./build-flatpak.sh   # installs prerequisites, vendors deps, builds, installs as user Flatpak
+
+flatpak run com.amadeuz.Notes
+```
+
+The script handles everything on first run: installs `flatpak-builder` via dnf, installs the GNOME SDK + Rust extension from Flathub, runs `cargo vendor vendor/` to pre-fetch all crates (needed because the sandbox has no network), and installs the app. Re-run after code changes to rebuild.
+
+If `Cargo.lock` changes, delete `vendor/` and `.cargo/` before re-running so they are regenerated.
+
 ### Source layout
 
 ```
@@ -376,10 +388,17 @@ notes/linux/
 ├── meson.build              ← project(), dependencies, subdir() calls
 ├── meson_options.txt        ← profile=default|development
 ├── Cargo.toml               ← Rust dependencies
+├── Cargo.lock               ← committed (required for reproducible Flatpak builds)
+├── com.amadeuz.Notes.yaml   ← Flatpak manifest
+├── build-flatpak.sh         ← one-shot: vendor deps, build, install as user Flatpak
 ├── data/
-│   ├── meson.build          ← Blueprint batch-compile, compile_resources, gschema install
-│   ├── com.amadeuz.Notes.gschema.xml   ← GSettings: server-url key
-│   ├── com.amadeuz.Notes.gresource.xml ← GResource manifest (window.ui, auth.ui, note_row.ui)
+│   ├── meson.build          ← Blueprint compile, compile_resources, gschema/desktop/metainfo install
+│   ├── com.amadeuz.Notes.gschema.xml    ← GSettings: server-url key
+│   ├── com.amadeuz.Notes.gresource.xml  ← GResource manifest (window.ui, auth.ui, note_row.ui)
+│   ├── com.amadeuz.Notes.desktop        ← desktop entry (makes app appear in GNOME Shell)
+│   ├── com.amadeuz.Notes.metainfo.xml   ← AppStream metadata
+│   ├── icons/hicolor/256x256/apps/
+│   │   └── com.amadeuz.Notes.png        ← app icon (sourced from icons/simple_notebook.png)
 │   └── ui/
 │       ├── window.blp       ← Blueprint: 3-column layout (folders | note list | editor)
 │       ├── auth.blp         ← Blueprint: login / register / recover UI
