@@ -55,3 +55,7 @@ notes/linux/Cargo.lock
 
 external-projects
 legacy-code
+
+node_modules
+node_modules/*
+notes/windows-electron/node_modules

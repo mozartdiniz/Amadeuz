@@ -2458,3 +2458,140 @@ pattern already implemented on macOS and iOS.
 > 📝 *Write here: does the WPF app feel different to use compared to the WinUI 3 one?
 > Is there anything that looks or behaves noticeably differently to a user, or is it
 > indistinguishable? The WinUI 3 Mica backdrop is gone — does that matter?*
+
+---
+
+## March 15, 2026 — Starting over on Windows: choosing Electron
+
+### Why we're here again
+
+The Windows client has now been written twice and abandoned twice.
+
+The first version used WinUI 3 / WinAppSDK. It was abandoned because the packaging story
+was broken in ways that were not fixable without accepting a hard dependency on the Windows
+App Runtime being installed on the target machine, combined with DLL version conflicts on
+Windows Insider Preview and a publish pipeline that only worked from Visual Studio, not
+`dotnet CLI`.
+
+The second version used WPF + ModernWpfUI + .NET 9. WPF fixed the packaging problems — 
+`dotnet build`, `dotnet run`, self-contained publish, all worked. But the feature 
+implementation itself ran into repeated failures that couldn't be resolved.
+
+After two complete rewrites and significant time invested, the decision was made to stop 
+trying to force a native Windows client and use Electron instead.
+
+### Why Electron, specifically
+
+Electron was explicitly ruled out at the start of this project. The vision document says
+"No browser engine wrappers. No Electron, no Tauri, no WebView containers." That principle
+was written with the right intent — native feel matters, and web wrappers often feel
+noticeably off.
+
+But there's a pragmatic argument that overrides it for Windows specifically:
+
+The other platforms are working. macOS, iOS, and Linux all have complete, working native
+clients. Android has code written and pending a first run. The Windows client is the only
+one that has failed repeatedly. At some point, the cost of another native attempt outweighs
+the cost of breaking the principle for one platform.
+
+Electron also has a strong track record for Windows apps. VS Code, Slack, Discord, Notion —
+apps that Windows users use daily and don't complain about feeling non-native. The gap
+between Electron and a native app on Windows is smaller than it is on macOS, where the
+platform feel is more distinctive and users are more sensitive to it.
+
+This Electron version will be the Windows-dedicated client. No other platform will use it.
+The decision is not "use web tech everywhere" — it's "use web tech on Windows because the
+native Windows approaches have failed."
+
+### What needs to be built
+
+Everything. All features are marked as pending:
+
+- Auth (login / register / recover with recovery codes)
+- Three-column layout: folder sidebar, note list, note editor
+- Offline-first local storage (`%APPDATA%\amadeuz\data.json`)
+- Full sync on connect (last-write-wins by timestamp)
+- 500 ms debounced save + REST PATCH
+- Per-note WebSocket live sync, auto-reconnect 3 s
+- Trash (soft delete / restore / permanently delete)
+- Move note between folders
+- Search / filter notes
+- Markdown formatting (headers, bold, checkboxes)
+- Inline images + offline blob queue
+- JWT credential storage via `safeStorage` (Electron's DPAPI-backed API)
+- Connection status indicator
+- Dark/light theme following system setting
+
+### Technical assessment: what's easy, what's not
+
+After studying the macOS and Linux source code, here's the honest assessment of implementing
+the same features in Electron:
+
+**Straightforward (no concerns):**
+- REST API client: `fetch()` in the renderer or main process. Trivial.
+- WebSocket: browser-native `WebSocket` API. No library needed.
+- Offline-first local storage: Node.js `fs` in the main process. `app.getPath('userData')` 
+  gives `%APPDATA%\amadeuz`. Simple JSON read/write.
+- Full sync logic: pure JavaScript. The `fullSync()` algorithm from `NoteViewModel.swift` 
+  ports directly — no platform-specific APIs.
+- Three-column layout: HTML/CSS flexbox or grid. Easy.
+- Date grouping (Today / Previous 7 Days / etc.): pure JavaScript date math.
+- 500 ms debounce: `setTimeout` / `clearTimeout`. One-liner.
+- Dark/light theme: Electron's `nativeTheme.shouldUseDarkColors` + CSS variables.
+- Search / filter: array filter on the in-memory note list.
+- Connection status indicator: a colored dot driven by WebSocket `onopen` / `onclose`.
+- Folder CRUD: REST + local state update, same pattern as other clients.
+- Trash: same sentinel pattern (`__wastebasket__`) as WPF and macOS.
+- JWT credential storage: Electron's `safeStorage.encryptString()` / `decryptString()` —
+  backed by DPAPI on Windows. Available since Electron 15. Much cleaner than the DPAPI 
+  P/Invoke that WPF required.
+
+**Requires a clear architectural decision (rich text editor):**
+The most important choice is the note editor. The macOS and Linux clients use native text 
+widgets (`NSTextView` / `GtkTextView`) with custom TextTag-based inline formatting — no 
+rendered HTML, just attribute overlays on a plain-text buffer. The WPF version used 
+`RichTextBox`.
+
+In Electron/web, the options are:
+1. Plain `<textarea>` — no inline styling possible. Rules itself out.
+2. Raw `contenteditable` div — possible but fragile. Cursor management, copy-paste 
+   behaviour, and IME handling are all manual. Not recommended.
+3. A rich text editor library (TipTap, ProseMirror, Quill) — the correct choice.
+
+**TipTap** (built on ProseMirror) is the recommendation. It has:
+- Markdown input rules (type `##` and space → heading)
+- Image support via an extension
+- First-class TypeScript support
+- Actively maintained
+
+The note content format (`title\ncontent` as a Markdown string with 
+`![](amadeuz://blob/{id})` for images) maps cleanly to TipTap's document model.
+The first line is the note title; the rest is content. TipTap can handle this with a
+custom `Title` node as the first block and a `Document` that enforces the structure.
+
+**Requires explicit setup (blob protocol):**
+The `amadeuz://blob/{id}` image URIs need to resolve to local files. In Electron, 
+`protocol.handle('amadeuz', handler)` in the main process intercepts these requests 
+and serves the file from `%APPDATA%\amadeuz\blobs\{id}`. Straightforward but needs 
+to be wired correctly in main process setup.
+
+**No real blockers.** Everything the WPF client had can be implemented in Electron.
+The markdown editor library choice is the most impactful decision — getting it right 
+from the start avoids a rewrite of the editor later.
+
+> 📝 *Write here: how does it feel to abandon the "native, always" principle for Windows?
+> Is this a pragmatic compromise you're at peace with, or does it feel like a failure? 
+> Is there something about Windows development specifically that makes native harder than
+> macOS or Linux?*
+
+### Where things stand
+
+The decision is made. The documents have been updated: all Windows features reset to pending,
+the platform table updated to reflect Electron, the decisions log updated with the full 
+reasoning. The WPF code is preserved in `notes/windows-wpf/` as a reference for the logic
+and feature set — it's a complete implementation of everything except the offline blob queue,
+and all the sync logic, auth flow, and API client patterns can be referenced when building
+the Electron equivalent.
+
+Next: scaffold the Electron project at `notes/windows-electron/` and start with the 
+foundation — main process setup, IPC bridge, data storage, and auth before any UI work.

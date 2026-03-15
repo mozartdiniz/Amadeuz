@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self';
+             script-src 'self';
+             style-src 'self' 'unsafe-inline';
+             img-src 'self' amadeuz: data: blob:;
+             connect-src *">
+  <title>Amadeuz Notes</title>
+  <script type="module" crossorigin src="./assets/index-Cf0dYzBx.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-nJ-VWYAy.css">
+</head>
+<body>
+  <!-- Auth view -->
+  <div id="auth-view" class="auth-view hidden">
+    <div class="auth-card">
+      <h1 class="auth-logo">Amadeuz</h1>
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login">Sign In</button>
+        <button class="auth-tab" data-tab="register">Register</button>
+        <button class="auth-tab" data-tab="recover">Recover</button>
+      </div>
+      <p id="auth-error" class="auth-error hidden"></p>
+
+      <!-- Login -->
+      <form id="form-login" class="auth-form" data-tab="login">
+        <div class="field-group">
+          <label>Server URL</label>
+          <input id="login-server" type="text" placeholder="http://localhost:8080">
+        </div>
+        <div class="field-group">
+          <label>Email</label>
+          <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email">
+        </div>
+        <div class="field-group">
+          <label>Password</label>
+          <input id="login-password" type="password" autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn-primary" id="btn-login">Sign In</button>
+      </form>
+
+      <!-- Register -->
+      <form id="form-register" class="auth-form hidden" data-tab="register">
+        <div class="field-group">
+          <label>Server URL</label>
+          <input id="reg-server" type="text" placeholder="http://localhost:8080">
+        </div>
+        <div class="field-group">
+          <label>Email</label>
+          <input id="reg-email" type="email" placeholder="you@example.com" autocomplete="email">
+        </div>
+        <div class="field-group">
+          <label>Password</label>
+          <input id="reg-password" type="password" autocomplete="new-password">
+        </div>
+        <button type="submit" class="btn-primary" id="btn-register">Create Account</button>
+      </form>
+
+      <!-- Recover -->
+      <form id="form-recover" class="auth-form hidden" data-tab="recover">
+        <div class="field-group">
+          <label>Server URL</label>
+          <input id="rec-server" type="text" placeholder="http://localhost:8080">
+        </div>
+        <div class="field-group">
+          <label>Email</label>
+          <input id="rec-email" type="email" placeholder="you@example.com">
+        </div>
+        <div class="field-group">
+          <label>Recovery Code</label>
+          <input id="rec-code" type="text" placeholder="XXXX-XXXX-XXXX">
+        </div>
+        <div class="field-group">
+          <label>New Password</label>
+          <input id="rec-password" type="password">
+        </div>
+        <button type="submit" class="btn-primary" id="btn-recover">Recover Account</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main app (3-column) -->
+  <div id="main-view" class="main-view hidden">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span id="conn-dot" class="conn-dot offline"></span>
+        <span class="sidebar-title">Amadeuz</span>
+        <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
+      </div>
+      <div class="sidebar-search">
+        <input id="search-input" type="text" placeholder="Search notes…">
+      </div>
+      <ul id="folder-list" class="folder-list"></ul>
+      <div class="sidebar-footer">
+        <button id="btn-new-folder" class="sidebar-action-btn">+ New Folder</button>
+        <button id="btn-sign-out" class="sidebar-action-btn danger">Sign Out</button>
+      </div>
+    </aside>
+
+    <!-- Note list -->
+    <section class="note-list-panel">
+      <div class="note-list-header">
+        <span id="folder-title-label" class="folder-title-label">All Notes</span>
+        <button id="btn-new-note" class="icon-btn" title="New note">＋</button>
+      </div>
+      <div id="note-list" class="note-list"></div>
+    </section>
+
+    <!-- Editor -->
+    <main class="editor-panel">
+      <div id="editor-empty" class="editor-empty">
+        <p>Select a note to edit</p>
+      </div>
+      <div id="editor-active" class="editor-active hidden">
+        <div id="editor-date" class="editor-date"></div>
+        <div id="tiptap-mount" class="tiptap-mount"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Settings dialog -->
+  <div id="dlg-settings" class="dialog-overlay hidden">
+    <div class="dialog">
+      <h3>Settings</h3>
+      <div class="field-group">
+        <label>Server Address</label>
+        <input id="settings-server-url" type="text">
+      </div>
+      <div class="dialog-actions">
+        <button id="btn-settings-save" class="btn-primary">Save</button>
+        <button id="btn-settings-cancel" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recovery code dialog -->
+  <div id="dlg-recovery" class="dialog-overlay hidden">
+    <div class="dialog">
+      <h3>Recovery Code</h3>
+      <p class="recovery-hint">Save this somewhere safe. It won't be shown again.</p>
+      <code id="recovery-code-text" class="recovery-code"></code>
+      <div class="dialog-actions">
+        <button id="btn-copy-recovery" class="btn-secondary">Copy</button>
+        <button id="btn-recovery-done" class="btn-primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Move note dialog -->
+  <div id="dlg-move" class="dialog-overlay hidden">
+    <div class="dialog">
+      <h3>Move to Folder</h3>
+      <ul id="move-folder-list" class="move-folder-list"></ul>
+      <div class="dialog-actions">
+        <button id="btn-move-cancel" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prompt dialog (folder rename) -->
+  <div id="dlg-prompt" class="dialog-overlay hidden">
+    <div class="dialog">
+      <h3 id="dlg-prompt-title">Rename</h3>
+      <div class="field-group">
+        <input id="dlg-prompt-input" type="text">
+      </div>
+      <div class="dialog-actions">
+        <button id="btn-prompt-ok" class="btn-primary">OK</button>
+        <button id="btn-prompt-cancel" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Context menu -->
+  <div id="context-menu" class="context-menu hidden"></div>
+
+</body>
+</html>

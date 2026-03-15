@@ -18,44 +18,44 @@
 
 | Feature | Server | macOS | Windows | Linux | iOS | Android |
 |---------|:------:|:-----:|:-------:|:-----:|:---:|:-------:|
-| Single note editor | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Offline-first local storage | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| WebSocket connection to server | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Auto-reconnect (3 s) | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| 500 ms debounce save | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Timestamp merge (last-write-wins) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Push local-ahead note on connect | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Connection status indicator | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Configurable server address | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Persistent server address | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Single note editor | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Offline-first local storage | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| WebSocket connection to server | ✅ | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Auto-reconnect (3 s) | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| 500 ms debounce save | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Timestamp merge (last-write-wins) | ✅ | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Push local-ahead note on connect | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Connection status indicator | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Configurable server address | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Persistent server address | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
 | Server persistence (SQLite) | ✅ | — | — | — | — | — |
-| Multiple notes | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Folders (create / rename / delete) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Cascade delete (folder → notes) | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| "All Notes" view | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Drawer/sidebar navigation | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Create / delete notes | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Note list with title, date, preview | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Unfoldered notes (folder optional) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Create note from "All Notes" view | — | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Move note between folders | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Folder label in note list row | — | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Search / filter notes | — | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Inline images in notes | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Multiple notes | ✅ | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Folders (create / rename / delete) | ✅ | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Cascade delete (folder → notes) | ✅ | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| "All Notes" view | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Drawer/sidebar navigation | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Per-note last-write-wins merge | ✅ | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Create / delete notes | ✅ | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Note list with title, date, preview | — | ✅ | ❌ | ✅ | ✅ | ⏳ |
+| Unfoldered notes (folder optional) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Create note from "All Notes" view | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Move note between folders | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Folder label in note list row | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Search / filter notes | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Inline images in notes | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
 | Offline blob queue (insert images offline) | — | ✅ | ❌ | ❌ | ✅ | ❌ |
-| Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ✅ | ✅ | ✅ | ❌ |
-| User accounts / JWT auth | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Register / Login / Recover | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Recovery codes | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| JWT in platform credential store | — | ✅ | ✅ | ✅ | ✅ | ❌ |
-| REST CRUD API | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Per-note WebSocket (live sync) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Sign Out | — | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Trash (soft delete / restore / delete permanently) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| User accounts / JWT auth | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Register / Login / Recover | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Recovery codes | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| JWT in platform credential store | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| REST CRUD API | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Per-note WebSocket (live sync) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Sign Out | — | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Trash (soft delete / restore / delete permanently) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
 | Offline mode (no account, persisted choice) | — | ❌ | ❌ | ✅ | ❌ | ❌ |
 | Welcome / onboarding screen | — | ❌ | ❌ | ✅ | ❌ | ❌ |
-| Image paste from clipboard (screenshots, web) | — | ❌ | ✅ | ✅ | ✅ | ❌ |
+| Image paste from clipboard (screenshots, web) | — | ❌ | ❌ | ✅ | ✅ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
@@ -232,16 +232,14 @@ Note model includes `deleted_at` (Int64, optional) for trash state.
 
 ---
 
-## Windows (C# + WPF + ModernWpfUI)
+## Windows (Electron)
 
-**Status:** Phase 2b complete — auth, REST + per-note WebSocket, trash/restore, move, search, Markdown, inline images
-**Location:** `notes/windows-wpf/`
-**Build (dev):** `dotnet build notes/windows-wpf/Amadeuz/Amadeuz.csproj`
-**Run:** `dotnet run --project notes/windows-wpf/Amadeuz/Amadeuz.csproj`
-**Requires:** .NET 9 SDK (no Visual Studio required; VS 2022 works too)
+**Status:** Not started — fresh Electron rewrite. All features pending.
+**Location:** `notes/windows-electron/` (to be created)
+**Stack:** Electron + HTML/CSS/JS (Node.js main process, renderer process)
 
-> **Note:** The original WinUI 3 client (`notes/windows/`) is preserved for reference.
-> The active client is the WPF rewrite at `notes/windows-wpf/`.
+> **Note:** Previous WPF client (`notes/windows-wpf/`) is preserved as legacy reference.
+> Previous WinUI 3 client (`notes/windows/`) is also preserved.
 
 ### Why the switch from WinUI 3 to WPF
 

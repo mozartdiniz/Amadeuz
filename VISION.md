@@ -13,7 +13,7 @@ major platform.
 
 ## Core principles
 
-### 1. Native, always
+### 1. Native, always (with one pragmatic exception)
 No browser engine wrappers. No Electron, no Tauri, no WebView containers.
 Every client is written in the idiomatic language and UI framework for its platform.
 Users should not be able to tell this isn't a platform-first app.
@@ -23,12 +23,18 @@ Users should not be able to tell this isn't a platform-first app.
 | macOS    | Swift + SwiftUI     |
 | iOS      | Swift + SwiftUI     |
 | Android  | Kotlin + Jetpack Compose |
-| Windows  | C# + WPF (.NET 9) + ModernWpfUI |
+| Windows  | Electron + HTML/CSS/JS *(exception — see decisions log)* |
 | Linux    | Rust + GTK4 + Libadwaita |
 | Server   | Go                  |
 
 Multiple platform-specific codebases are acceptable and expected.
 Shared code is good when it doesn't compromise native feel; it is never worth forcing.
+
+**Windows exception:** The Windows client has gone through WinUI 3 and WPF rewrites, both
+abandoned due to packaging failures, toolchain friction, and deployment complexity. After
+multiple failed attempts at a native Windows client, the pragmatic decision was made to use
+Electron for Windows only. The other platforms remain native. The Electron client will be
+the Windows-dedicated app — no other platform will use it.
 
 ### 2. Offline-first
 Every client loads from local disk immediately on startup and works fully without a server.
@@ -78,7 +84,7 @@ All mutations go through REST; per-note WebSocket is reserved for live keystroke
 **Each client** owns a local copy of the data. On connect, it runs a full sync: merges server
 state with local state by timestamp (last-write-wins), pushes any locally-created or
 locally-newer items. JWT is stored in the platform's secure credential store (Keychain on
-Apple, DPAPI-encrypted file on Windows, libsecret on Linux).
+Apple, Electron `safeStorage` (DPAPI-backed) on Windows, libsecret on Linux).
 
 ---
 
@@ -155,7 +161,7 @@ Storage paths:
 | Platform | Data file | Credential store |
 |----------|-----------|-----------------|
 | macOS    | `~/Library/Application Support/amadeuz/data.json` | Keychain |
-| Windows  | `%APPDATA%\amadeuz\data.json` | DPAPI (`%APPDATA%\amadeuz\token.dat`) |
+| Windows  | `%APPDATA%\amadeuz\data.json` | Electron `safeStorage` (DPAPI-backed) |
 | Linux    | `~/.local/share/amadeuz/data.json` | libsecret / GNOME Keyring |
 | iOS      | `<App>/Library/Application Support/amadeuz/data.json` | Keychain |
 | Server   | `amadeuz.db` (SQLite) | — |
@@ -225,7 +231,8 @@ amadeuz/
     │       ├── APIClient.swift      ← all REST calls + WebSocket URL builder
     │       └── AuthView.swift       ← Login / Register / Recover UI; RecoveryCodeView sheet
     ├── windows/         ← Windows (C# + WinUI 3) — legacy, preserved for reference
-    ├── windows-wpf/     ← Windows (C# + WPF + ModernWpfUI) — active client
+    ├── windows-wpf/     ← Windows (C# + WPF + ModernWpfUI) — legacy, preserved for reference
+    ├── windows-electron/ ← Windows (Electron) — active client (in progress)
     ├── linux/           ← Linux (C++ + GTK4)
     ├── ios/             ← iOS (Swift + SwiftUI)
     └── android/         ← Android (Kotlin + Jetpack Compose)
@@ -238,7 +245,7 @@ amadeuz/
 ### Phase 1 — Single note POC ✅ COMPLETE
 - [x] Go server — running on Raspberry Pi 3 B via systemd
 - [x] macOS client — Swift + SwiftUI, runs via `swift run`
-- [x] Windows client — C# + WPF + ModernWpfUI, builds with `dotnet build` (rewritten from WinUI 3)
+- [ ] Windows client — Electron rewrite in progress (WPF and WinUI 3 versions preserved as legacy)
 - [x] Linux client — C++ + GTK4, built with CMake
 - [x] End-to-end validated: Mac, Windows, and Linux syncing over LAN simultaneously
 - [x] iOS client — Swift + SwiftUI, shares `LocalStore`/`SyncService` with macOS, running on device
@@ -441,3 +448,4 @@ notes/linux/
 | ModernWpfUI over Wpf.Ui (lepoco) for WPF Fluent styling (March 2026) | The natural choice for WPF Fluent styling is `Wpf.Ui` by lepoco. However, the NuGet package ID `WPF.UI` is squatted by an unrelated Chinese package (`WPF.UI 3.1.0`, net40 only) — lepoco's package is effectively unreachable from a standard `dotnet add package` invocation. ModernWpfUI (0.9.6) provides the same set of primitives needed (`ui:WindowHelper.UseModernWindowStyle`, `AccentButtonStyle`, `TextBlockButtonStyle`, `ui:ControlHelper.PlaceholderText`, system theme watching) and installs cleanly. |
 | DPAPI (`ProtectedData`) for Windows JWT storage in WPF (March 2026) | The WinUI 3 client used `Windows.Security.Credentials.PasswordVault` (Windows Credential Manager) via WinRT. Plain WPF has no access to WinRT APIs without additional interop machinery. DPAPI (`System.Security.Cryptography.ProtectedData`) is available in the .NET BCL, encrypts with the current user's Windows login credentials, and is equally secure for the single-user use case. Token is stored as an encrypted binary at `%APPDATA%\amadeuz\token.dat`. |
 | CommunityToolkit.Mvvm for WPF MVVM base (March 2026) | `ObservableObject` base class and `[ObservableProperty]` source generator from CommunityToolkit.Mvvm (8.4.0) reduce boilerplate significantly — no manual `INotifyPropertyChanged` implementations needed. This is the same toolkit used on Android (Jetpack) and aligns with the modern .NET MVVM direction. Thread marshaling uses `Dispatcher.BeginInvoke` (the WPF equivalent of WinUI's `_dispatcher.TryEnqueue`). |
+| Windows client: Electron rewrite, abandoning WPF (March 2026) | The Windows client has now gone through two complete rewrites — WinUI 3 (abandoned: packaging failures, DLL incompatibilities, silent bootstrap crashes, MSBuild-only publish) and WPF/ModernWpfUI (abandoned: repeated implementation failures during feature development). After multiple failed attempts at a stable native Windows client, the pragmatic decision is to use Electron for Windows only. The "native, always" principle has been relaxed for Windows because repeated native attempts produced no working result. The other platforms (macOS, iOS, Linux, Android) remain native — they are working well and will not change. The Electron client is Windows-dedicated; no other platform will use it. |
