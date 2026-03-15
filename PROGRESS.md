@@ -37,25 +37,25 @@
 | Per-note last-write-wins merge | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Create / delete notes | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Note list with title, date, preview | — | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Unfoldered notes (folder optional) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Create note from "All Notes" view | — | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Move note between folders | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Folder label in note list row | — | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Search / filter notes | — | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Inline images in notes | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Unfoldered notes (folder optional) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Create note from "All Notes" view | — | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Move note between folders | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Folder label in note list row | — | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Search / filter notes | — | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Inline images in notes | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Offline blob queue (insert images offline) | — | ✅ | ❌ | ❌ | ✅ | ❌ |
-| Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ❌ | ✅ | ✅ | ❌ |
-| User accounts / JWT auth | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Register / Login / Recover | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Recovery codes | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
-| JWT in platform credential store | — | ✅ | ❌ | ✅ | ✅ | ❌ |
-| REST CRUD API | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Per-note WebSocket (live sync) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Sign Out | — | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Trash (soft delete / restore / delete permanently) | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Markdown rich text (headers, bullets, checkboxes) | — | ✅ | ✅ | ✅ | ✅ | ❌ |
+| User accounts / JWT auth | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Register / Login / Recover | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Recovery codes | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| JWT in platform credential store | — | ✅ | ✅ | ✅ | ✅ | ❌ |
+| REST CRUD API | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Per-note WebSocket (live sync) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Sign Out | — | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Trash (soft delete / restore / delete permanently) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Offline mode (no account, persisted choice) | — | ❌ | ❌ | ✅ | ❌ | ❌ |
 | Welcome / onboarding screen | — | ❌ | ❌ | ✅ | ❌ | ❌ |
-| Image paste from clipboard (screenshots, web) | — | ❌ | ❌ | ✅ | ✅ | ❌ |
+| Image paste from clipboard (screenshots, web) | — | ❌ | ✅ | ✅ | ✅ | ❌ |
 | **End-to-end encryption** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Note sharing between users** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
@@ -232,47 +232,69 @@ Note model includes `deleted_at` (Int64, optional) for trash state.
 
 ---
 
-## Windows (C# + WinUI 3)
+## Windows (C# + WPF + ModernWpfUI)
 
-**Status:** Phase 2b complete — folders + multiple notes, three-column layout
-**Location:** `notes/windows/`
-**Build (dev):** Open `Amadeuz.sln` in Visual Studio 2022, press F5
-**Requires:** Visual Studio 2022 + Windows App SDK workload, Windows 11
+**Status:** Phase 2b complete — auth, REST + per-note WebSocket, trash/restore, move, search, Markdown, inline images
+**Location:** `notes/windows-wpf/`
+**Build (dev):** `dotnet build notes/windows-wpf/Amadeuz/Amadeuz.csproj`
+**Run:** `dotnet run --project notes/windows-wpf/Amadeuz/Amadeuz.csproj`
+**Requires:** .NET 9 SDK (no Visual Studio required; VS 2022 works too)
 
-### Publish (xcopy-deployable folder)
+> **Note:** The original WinUI 3 client (`notes/windows/`) is preserved for reference.
+> The active client is the WPF rewrite at `notes/windows-wpf/`.
 
-Use MSBuild from Visual Studio — **not** `dotnet publish` (it fails on WinUI 3 PRI generation):
+### Why the switch from WinUI 3 to WPF
 
-```
-"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" \
-  notes/windows/Amadeuz/Amadeuz.csproj \
-  -t:Publish \
-  -p:Configuration=Release \
-  -p:RuntimeIdentifier=win-x64 \
-  -p:SelfContained=true \
-  -p:PublishDir=notes/windows/publish
-```
+WinUI 3 / WinAppSDK accumulated several packaging and build issues:
+- `WindowsAppSDKSelfContained=true` bundled native DLLs incompatible with Windows Insider Preview
+- `dotnet publish` fails on WinUI 3 PRI generation — MSBuild from VS required
+- Bootstrap init (`WindowsAppSdkBootstrapInitialize=true`) crashes silently if omitted
+- Target machine requires Windows App Runtime 1.8 installed separately
 
-The output folder is self-contained for .NET (no .NET install needed on target), but requires
-**Windows App Runtime 1.8** to be installed on the machine. On first run on a new machine,
-the app shows a dialog offering to install it automatically.
+WPF avoids all of these. `dotnet build` and `dotnet run` work cleanly. Self-contained
+publish is `dotnet publish -r win-x64 --self-contained`. No runtime install required.
 
-### Key csproj settings
-- `WindowsPackageType=None` — unpackaged, no MSIX, no Developer Mode needed
-- `WindowsAppSdkBootstrapInitialize=true` — must be explicit; without it XAML crashes silently
-- No `WindowsAppSDKSelfContained` — bundling native WinAppSDK DLLs causes crashes on Windows Insider Preview
-- Custom target `CopyPriFilesToPublish` — copies `*.pri` resource files to publish output (required for XAML)
+The preferred styling library `Wpf.Ui` (by lepoco) is effectively unavailable from nuget.org —
+the `WPF.UI` package ID is squatted by an unrelated Chinese package (`WPF.UI 3.1.0`, net40 only).
+**ModernWpfUI** (0.9.6) was used instead — it provides Fluent Design / Windows 10/11 styling
+without external DLL complications.
+
+### Stack
+
+| Layer | Choice |
+|-------|--------|
+| Language | C# |
+| Framework | WPF (.NET 9) |
+| Styling | ModernWpfUI 0.9.6 |
+| MVVM base | CommunityToolkit.Mvvm 8.4.0 (`ObservableObject`, `[ObservableProperty]`) |
+| Thread marshaling | `Dispatcher.BeginInvoke` |
+| Credential store | DPAPI (`ProtectedData`) — `%APPDATA%\amadeuz\token.dat` |
 
 ### What it does
-- Three-column layout: folder sidebar | note list | note editor
-- Create/rename/delete folders (context menu on right-click)
-- Create/delete notes (toolbar buttons + right-click context menu)
-- Note list sorted by `updatedAt` descending, with title, date, and content preview
-- Full offline-first: loads `data.json` on startup, works without server
-- Debounce: 500ms after last change to title or content → save locally + push to server
-- Per-note last-write-wins merge on reconnect (push local if ahead)
-- Auto-reconnect every 3 seconds; green/red status dot in status bar
-- "All Notes" virtual folder shows all notes across all folders
+
+- **Auth**: Login / Register / Recover overlay (full-screen card) with server URL, email, password, recovery-code, and new-password fields. Mode tabs switch between Log In / Register / Recover. Recovery code shown in a `MessageBox` after registration or recovery. JWT stored via DPAPI at `%APPDATA%\amadeuz\token.dat`.
+- **Three-column layout**: folder sidebar | note list | note editor
+- **Folder sidebar**: "All Notes" sentinel → user folders → "Wastebasket" sentinel (pinned at bottom). Create/rename/delete folders via right-click context menu (blocked on sentinels). "New Folder" button at bottom.
+- **Note list**: sorted by `updatedAt` descending; title, date, content preview. Search bar filters in real time. Right-click → Move to Trash (normal view) or Restore / Delete Permanently (wastebasket view). Move to Folder submenu lists all user folders.
+- **Single-body `RichTextBox` editor**: first line is the title; remaining lines are the body. Disabled until a note is selected.
+- **Markdown formatting**: visual formatting via `TextRange` / `Run` inline properties — `# / ## / ###` headings, bullets, checkboxes, `**bold**`, `_italic_`, `~~strikethrough~~`. Format pass debounced at 120 ms.
+- **Inline images**: Ctrl+V with an image on the clipboard saves to `%APPDATA%\amadeuz\blobs\{id}.png`, queues upload via `PUT /blobs/{id}`, inserts `![](amadeuz://blob/{id})` at the cursor.
+- **Folder label in note list rows**: each row shows folder icon + folder name (or "—" for unfoldered notes).
+- 500 ms debounce on any change → save locally + REST PATCH to server.
+- **Full offline-first**: loads `data.json` on startup; works without server. On connect: full sync — REST GET /folders + GET /notes, merges by last-write-wins, pushes any offline-created or locally-newer notes/folders.
+- **Per-note WebSocket**: opens when a note is selected (`GET /notes/:id/ws?token=<jwt>`); receives live title+content updates from other clients; auto-reconnects every 3 s.
+- **Trash (soft delete)**: "Wastebasket" virtual folder shows notes with `deleted_at` set. `PATCH /notes/:id/trash` / `PATCH /notes/:id/restore` / `DELETE /notes/:id`.
+- **Move note**: right-click → Move to Folder submenu; `PATCH /notes/:id/move`.
+- **Search**: search box → `Vm.SetSearchQuery()` → filtered `ObservableCollection` diff.
+- **Sign Out**: clears state, deletes DPAPI token file, shows auth overlay.
+- Green/red status dot; ModernWpfUI system theme watching for dark/light mode.
+
+### Virtual folder sentinels
+
+| Sentinel | Meaning |
+|----------|---------|
+| `"__all__"` | All Notes — shows all active (non-trashed) notes |
+| `"__wastebasket__"` | Wastebasket — shows notes where `deleted_at != null` |
 
 ### Local storage
 `%APPDATA%\amadeuz\data.json`
@@ -281,24 +303,30 @@ the app shows a dialog offering to install it automatically.
 ```
 
 ### Settings storage
-`%APPDATA%\amadeuz\settings.json` — JSON `{ "serverAddress": "ws://..." }`
-Default server: `ws://localhost:8080/ws`
+`%APPDATA%\amadeuz\settings.json` — JSON `{ "serverAddress": "http://..." }`
+Default server: `http://localhost:8080`
+
+### Credential storage
+`%APPDATA%\amadeuz\token.dat` — DPAPI-encrypted JWT (no WinRT available in plain WPF).
+`ProtectedData.Protect` / `ProtectedData.Unprotect` with `DataProtectionScope.CurrentUser`.
 
 ### Key files
 | File | Role |
 |------|------|
-| `MainWindow.xaml` | Three-column Grid layout; DataTemplates for folder/note lists |
-| `MainWindow.xaml.cs` | Event wiring; `_suppressEditorChanged` flag; dialog helpers |
-| `NotesViewModel.cs` | State, debounce (`CancellationTokenSource` + `Task.Delay`), sync, CRUD |
-| `Models.cs` | `Folder`, `Note`, `FolderItem`, `WsMessage` types |
+| `MainWindow.xaml` | Two-layer Grid: notes UI + full-screen auth overlay; DataTemplates for folder/note lists; SearchBox; auth card with mode tabs |
+| `MainWindow.xaml.cs` | Auth overlay show/hide; mode tab switching; recovery code display; context-sensitive right-click menus; search wiring |
+| `NotesViewModel.cs` | Auth, `FullSync`, CRUD, trash/restore/move, search filter, debounce, per-note WS lifecycle, offline-first merge. `ObservableObject` base via CommunityToolkit.Mvvm; `[ObservableProperty]` for bound properties; `Dispatcher.BeginInvoke` for thread marshaling. |
+| `ApiClient.cs` | All REST calls (auth, folders, notes); DPAPI token store; `WsUrlForNote`; `NormaliseUrl` |
+| `Models.cs` | `Folder`, `Note` (with `DeletedAt`, `INotifyPropertyChanged`), `FolderItem` (with `IsWastebasket`/`IsSpecial`), `NoteWsMessage`, `AuthResponse` |
 | `LocalStore.cs` | Read/write `data.json` (folders + notes) via `System.Text.Json` |
-| `SyncService.cs` | `ClientWebSocket` wrapper, typed `WsMessage` delivery, auto-reconnect |
+| `SyncService.cs` | Per-note `ClientWebSocket` wrapper, `NoteWsMessage` delivery, auto-reconnect every 3 s |
 
-### Visual notes
-- Uses Mica backdrop (`SystemBackdrop = new MicaBackdrop()`) for native Windows 11 look
-- Status dot is a WinUI `Ellipse` with `Fill` changed in code-behind
-- All dialogs (Settings, New Folder, Rename) are `ContentDialog` built in code (no XAML)
-- `FolderItem` sentinel class unifies "All Notes" + real folders into one ListView
+### ModernWpfUI notes
+- `ui:WindowHelper.UseModernWindowStyle="True"` on the Window — enables Fluent chrome
+- `AccentButtonStyle` and `TextBlockButtonStyle` available as static resources
+- `ui:ControlHelper.PlaceholderText` attached property for placeholder text on inputs
+- System theme watching included — app follows Windows dark/light mode automatically
+- No Mica backdrop (WPF does not support DWM backdrop APIs directly; requires P/Invoke)
 
 ---
 

@@ -85,7 +85,19 @@
       "Bash(ninja -C builddir 2>&1 | tail -8)",
       "Bash(find /Users/mozartdiniz/Dev/amadeuz/legacy-code -type f \\\\\\( -name \"*.swift\" -o -name \"*.md\" -o -name \"*.sh\" \\\\\\) 2>/dev/null | head -20)",
       "Bash(cd /Users/mozartdiniz/Dev/amadeuz/notes/linux && cargo check 2>&1 | grep -E \"^error|warning\\\\[\" | head -30)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(find /c/Users/user/Dev/Amadeuz/notes/linux -type f -name \"*.rs\" -o -name \"*.toml\" -o -name \"*.py\" -o -name \"*.cpp\" -o -name \"*.h\" -o -name \"*.txt\" 2>/dev/null | head -50)",
+      "Bash(find /c/Users/user/Dev/Amadeuz/notes/windows -type f \\\\\\( -name \"*.cs\" -o -name \"*.xaml\" -o -name \"*.csproj\" -o -name \"*.xml\" \\\\\\) 2>/dev/null | head -100)",
+      "Bash(echo \"\" >> \"C:\\\\Users\\\\user\\\\Dev\\\\Amadeuz\\\\DIARY.md\")",
+      "Read(//c/Users/user/AppData/Roaming/amadeuz/**)",
+      "Read(//c/Users/user/AppData/Roaming/amadeuz/blobs/**)",
+      "Bash(cat:*)",
+      "Read(//c/Users/user/.nuget/packages/wpf.ui/**)",
+      "Read(//c/Users/user/.nuget/packages/**)",
+      "Bash(Remove-Item -Recurse -Force \"C:\\\\Users\\\\user\\\\.nuget\\\\packages\\\\wpf.ui\" 2>&1; echo \"done\")",
+      "Bash(rm:*)",
+      "Bash(cd:*)",
+      "Bash(find:*)"
     ]
   }
 }

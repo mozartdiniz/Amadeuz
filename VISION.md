@@ -23,7 +23,7 @@ Users should not be able to tell this isn't a platform-first app.
 | macOS    | Swift + SwiftUI     |
 | iOS      | Swift + SwiftUI     |
 | Android  | Kotlin + Jetpack Compose |
-| Windows  | C# + WinUI 3        |
+| Windows  | C# + WPF (.NET 9) + ModernWpfUI |
 | Linux    | Rust + GTK4 + Libadwaita |
 | Server   | Go                  |
 
@@ -78,7 +78,7 @@ All mutations go through REST; per-note WebSocket is reserved for live keystroke
 **Each client** owns a local copy of the data. On connect, it runs a full sync: merges server
 state with local state by timestamp (last-write-wins), pushes any locally-created or
 locally-newer items. JWT is stored in the platform's secure credential store (Keychain on
-Apple, Credential Manager on Windows, libsecret on Linux).
+Apple, DPAPI-encrypted file on Windows, libsecret on Linux).
 
 ---
 
@@ -155,7 +155,7 @@ Storage paths:
 | Platform | Data file | Credential store |
 |----------|-----------|-----------------|
 | macOS    | `~/Library/Application Support/amadeuz/data.json` | Keychain |
-| Windows  | `%APPDATA%\amadeuz\data.json` | Windows Credential Manager |
+| Windows  | `%APPDATA%\amadeuz\data.json` | DPAPI (`%APPDATA%\amadeuz\token.dat`) |
 | Linux    | `~/.local/share/amadeuz/data.json` | libsecret / GNOME Keyring |
 | iOS      | `<App>/Library/Application Support/amadeuz/data.json` | Keychain |
 | Server   | `amadeuz.db` (SQLite) | — |
@@ -224,7 +224,8 @@ amadeuz/
     │       ├── KeychainStore.swift  ← save, load, delete JWT from macOS Keychain
     │       ├── APIClient.swift      ← all REST calls + WebSocket URL builder
     │       └── AuthView.swift       ← Login / Register / Recover UI; RecoveryCodeView sheet
-    ├── windows/         ← Windows (C# + WinUI 3)
+    ├── windows/         ← Windows (C# + WinUI 3) — legacy, preserved for reference
+    ├── windows-wpf/     ← Windows (C# + WPF + ModernWpfUI) — active client
     ├── linux/           ← Linux (C++ + GTK4)
     ├── ios/             ← iOS (Swift + SwiftUI)
     └── android/         ← Android (Kotlin + Jetpack Compose)
@@ -237,7 +238,7 @@ amadeuz/
 ### Phase 1 — Single note POC ✅ COMPLETE
 - [x] Go server — running on Raspberry Pi 3 B via systemd
 - [x] macOS client — Swift + SwiftUI, runs via `swift run`
-- [x] Windows client — C# + WinUI 3, distributed as xcopy-deployable folder
+- [x] Windows client — C# + WPF + ModernWpfUI, builds with `dotnet build` (rewritten from WinUI 3)
 - [x] Linux client — C++ + GTK4, built with CMake
 - [x] End-to-end validated: Mac, Windows, and Linux syncing over LAN simultaneously
 - [x] iOS client — Swift + SwiftUI, shares `LocalStore`/`SyncService` with macOS, running on device
@@ -257,6 +258,8 @@ Windows, Linux, iOS, Android: Phase 2b architecture still in use — Phase 2a pa
 Server: folder + note CRUD over typed WebSocket messages, in-memory store + data.json.
 Client: three-column layout (folder sidebar, note list, note editor) on all three desktop platforms.
 macOS also has: inline images, Markdown styling, offline blob queue, search, move note.
+Windows (updated March 2026): REST + per-note WS architecture replacing the old shared-WS protocol.
+Now has auth, trash, move note, search, sign out — full parity with macOS except Markdown/images.
 
 **Phase 2c — End-to-end encryption**
 Server stores ciphertext only. Clients generate X25519 keypairs, encrypt notes with
@@ -425,3 +428,16 @@ notes/linux/
 | Dynamic `gio::Menu` model instead of static Blueprint menu | The hamburger menu needs different items based on state: authenticated → "Server Settings" + "Sign Out"; offline → "Return to Start". Updating labels in a static Blueprint-defined menu is awkward. Instead, `refresh_ui()` calls `menu_button.set_menu_model(Some(&menu))` with a freshly built `gio::Menu` on each state change. Cost is negligible (only rebuilds on auth/offline transitions). |
 | `gdk::Texture` clipboard branch for image paste | The original paste handler only handled `gdk::FileList` (files from file manager). Screenshots (PrintScreen) and images copied from browsers place a `GdkTexture` on the clipboard. Added a second branch: `clipboard.read_texture_async()` saves the texture as PNG to the note's local image directory. The callback type is `Result<Option<Texture>, glib::Error>` — `None` means no image was available, not an error. |
 | `Blueprint StackPage { name: … }` vs widget `name:` property | Setting `name: "foo"` on a direct child of `Gtk.Stack` in Blueprint sets `GtkWidget.name` (used for CSS targeting), not the `GtkStackPage` name that `set_visible_child_name()` looks up. Must wrap children in `Gtk.StackPage { name: "foo"; child: … }`. Discovered via "Child name 'X' not found in GtkStack" runtime warnings. |
+| Windows client: rewritten from shared-WS to REST + per-note WS (March 2026) | The original Windows client used a custom shared WebSocket protocol at a single `/ws` endpoint (with typed messages like `create_folder`, `update_note`). The server dropped this in favour of standard REST + per-note WebSocket rooms (same architecture as all other clients). Rather than patch the old code, the Windows sync layer was fully rewritten: `ApiClient.cs` handles all REST calls + auth; `SyncService.cs` now wraps a per-note `ClientWebSocket` instead of a shared bus; `NotesViewModel.cs` was rewritten around `FullSync()` + `NoteSelectionChanged()`. |
+| `ContentDialog` for recovery code display (Windows) | The initial design placed a recovery code panel inline in the auth overlay XAML. It was never visible: `StateChanged` (which hides the auth overlay) and `RecoveryCode` (which would show the panel) were both enqueued in the same `_dispatcher.TryEnqueue` batch — the overlay was already gone by the time the code tried to show the panel. Fix: display the recovery code in a `ContentDialog` created entirely in code-behind, shown immediately after auth succeeds (while the app is already in main-view state). |
+| `NormaliseNote()` maps `deleted_at` → `folder_id = "__wastebasket__"` at load boundaries (Windows) | The server returns notes with `deleted_at` set and `folder_id = null` for trashed notes. The Windows client uses a single `FolderId` string to route notes to the correct ListView bucket. Rather than add trash-vs-active branches throughout the filtering and display code, `NormaliseNote()` is called at every load boundary (REST sync, local load, WS init) and sets `FolderId = "__wastebasket__"` when `DeletedAt` has a value. This keeps all filtering logic uniform. |
+| `PasswordVault` (Windows Credential Manager) for JWT storage (Windows) | WinRT `PasswordVault` (Windows Credential Manager) is the platform-native secure storage for credentials — equivalent to Keychain on Apple and libsecret on Linux. Resource name: `amadeuz-jwt`; username: `jwt`. Survives app restart without re-authentication. No plaintext token on disk. |
+| First line as title (Windows) — matching macOS/iOS | The original Windows editor had a separate `TextBox` for the title and a second `TextBox` for the body. macOS and iOS abandoned the dedicated title field: the note has a single body, and the first line is the title. Windows was updated to match: a single `RichEditBox` holds `title + "\n" + content`; `SplitBody()` extracts the two fields at flush time. This is both simpler (one editor, one binding) and consistent across clients (a note edited on Windows and viewed on macOS shows the same line as the title). |
+| `RichEditBox` instead of `TextBox` for Windows note editor | `TextBox` supports only uniform character formatting. Markdown styling (different sizes for headings, bold, italic, strikethrough) requires per-character formatting, which is only available via `RichEditBox` and its `ITextDocument` / `ITextRange` API. `RichEditBox` internal paragraph separator is `\r` (not `\n`); `GetText` appends a trailing `\r\0`. `GetBody()` strips those and converts `\r` → `\n` for storage. `_suppressEditorChanged` and `_applyingFormat` guard flags prevent recursive `TextChanged` triggers during programmatic updates. |
+| Markdown formatting debounce on Windows (120 ms, separate from save debounce) | Applying markdown formatting (`ApplyMarkdownFormatting`) on every single keystroke causes visible lag on large notes because `ITextRange.CharacterFormat` changes are synchronous and invalidate layout. A 120 ms `DispatcherTimer` (restarted on every `TextChanged`) defers the format pass until typing pauses. The save debounce remains at 500 ms and is wired separately via `Vm.OnEditorChanged`. The two timers are independent — neither blocks the other. |
+| Wastebasket as a pinned button outside the folder `ListView` (Windows) | The Wastebasket sentinel was initially included in `FolderItems`, the same `ObservableCollection` that backs the folder `ListView`. This caused confusion: the Wastebasket row was indistinguishable from a real folder to the selection/deselection logic, and its "selected" state was lost whenever `RebuildFolderItems()` rebuilt the collection. Moving it to a dedicated XAML `Button` (pinned between the `ListView` and the "New Folder" button) solves both problems: `_wastebasketSelected` bool tracks its visual state independently; `AccentButtonStyle` is applied/cleared explicitly; the `ListView` only ever contains "All Notes" + real user folders. |
+| Image paste as Ctrl+V intercept on `RichEditBox` (Windows) | `RichEditBox` has built-in Ctrl+V paste that pastes bitmaps as OLE objects embedded in the document. OLE objects are not extractable back to bytes through the public `ITextDocument` API, so there is no way to serialize them for sync. The solution is to intercept Ctrl+V in `NoteRichEditBox_KeyDown`, check for a bitmap on the clipboard, re-encode it as PNG via WinRT `BitmapDecoder`/`BitmapEncoder`, save to the blobs directory, and insert a `![](amadeuz://blob/{id})` Markdown reference at the cursor — which is the same format all other clients use. `e.Handled = true` prevents the default OLE paste from running. |
+| Windows client rewritten in WPF, dropping WinUI 3 (March 2026) | The WinUI 3 / WinAppSDK client accumulated a set of packaging and build problems that made it fragile and hard to deploy: `WindowsAppSDKSelfContained=true` bundled native DLLs incompatible with Windows Insider Preview; `dotnet publish` failed on PRI generation, requiring MSBuild from Visual Studio; bootstrap init had to be forced on explicitly or the app crashed silently before XAML loaded; and target machines needed the Windows App Runtime installed separately. WPF with .NET 9 eliminates all of these: `dotnet build` / `dotnet run` work cleanly, self-contained publish is a single `dotnet publish` command, and no runtime install is required. The old WinUI 3 code is preserved in `notes/windows/`; the active client is `notes/windows-wpf/`. |
+| ModernWpfUI over Wpf.Ui (lepoco) for WPF Fluent styling (March 2026) | The natural choice for WPF Fluent styling is `Wpf.Ui` by lepoco. However, the NuGet package ID `WPF.UI` is squatted by an unrelated Chinese package (`WPF.UI 3.1.0`, net40 only) — lepoco's package is effectively unreachable from a standard `dotnet add package` invocation. ModernWpfUI (0.9.6) provides the same set of primitives needed (`ui:WindowHelper.UseModernWindowStyle`, `AccentButtonStyle`, `TextBlockButtonStyle`, `ui:ControlHelper.PlaceholderText`, system theme watching) and installs cleanly. |
+| DPAPI (`ProtectedData`) for Windows JWT storage in WPF (March 2026) | The WinUI 3 client used `Windows.Security.Credentials.PasswordVault` (Windows Credential Manager) via WinRT. Plain WPF has no access to WinRT APIs without additional interop machinery. DPAPI (`System.Security.Cryptography.ProtectedData`) is available in the .NET BCL, encrypts with the current user's Windows login credentials, and is equally secure for the single-user use case. Token is stored as an encrypted binary at `%APPDATA%\amadeuz\token.dat`. |
+| CommunityToolkit.Mvvm for WPF MVVM base (March 2026) | `ObservableObject` base class and `[ObservableProperty]` source generator from CommunityToolkit.Mvvm (8.4.0) reduce boilerplate significantly — no manual `INotifyPropertyChanged` implementations needed. This is the same toolkit used on Android (Jetpack) and aligns with the modern .NET MVVM direction. Thread marshaling uses `Dispatcher.BeginInvoke` (the WPF equivalent of WinUI's `_dispatcher.TryEnqueue`). |

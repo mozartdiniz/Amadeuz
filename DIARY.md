@@ -2122,3 +2122,339 @@ WebSocket. The matrix is updated. The old app is in `legacy-code/ios/`.
 > actually syncs with the server you built yourself? The first time a note you type on
 > your phone appears on your Mac without any manual action — is that the moment this stops
 > feeling like a coding exercise and starts feeling like a real product?*
+
+
+---
+
+## March 14, 2026 — Bringing Windows to parity
+
+### The problem
+
+After several focused sessions on macOS, Linux, and iOS, the Windows client was left behind.
+The server had moved on completely: it dropped the custom shared-WebSocket protocol in favour
+of standard REST + per-note WebSocket rooms. Every other client had already been rewritten
+against the new server. Windows hadn't. Trying to run the Windows app against the current
+server would have resulted in silent failure — the old `/ws` endpoint simply doesn't exist
+anymore.
+
+The gap was wider than it looked from the outside. It wasn't just "add auth". The entire
+sync layer was built around a protocol that no longer exists. `SyncService.cs` connected
+to a single WebSocket endpoint and received typed bus messages (`create_folder`, `update_note`,
+`init`). `NotesViewModel.cs` was wired to those message types. `Models.cs` had a `WsMessage`
+class that matched the old format. None of it was compatible with the new server.
+
+The decision was to do a clean rewrite of the sync layer rather than patch around it.
+
+### What was rewritten
+
+**`ApiClient.cs`** (new file) — A dedicated REST client that mirrors `APIClient.swift` on
+macOS/iOS. All HTTP interactions live here: auth (login, register, recover), folder CRUD,
+note CRUD (including trash/restore/move). `PasswordVault` JWT storage is also here —
+Windows Credential Manager, the same role as Keychain on Apple platforms and libsecret
+on Linux. One small convenience method: `NormaliseUrl()` accepts `ws://`, `http://`, or
+bare hostnames and returns a clean `http://` base URL — because users will inevitably
+paste WebSocket URLs from older sessions.
+
+**`SyncService.cs`** (rewritten) — The class name stayed the same but the internals are
+completely different. Instead of connecting to a single bus and dispatching typed messages
+for all notes and folders, it opens one `ClientWebSocket` per note at
+`GET /notes/:id/ws?token=<jwt>`. The connection opens when a note is selected, closes when
+a different note is selected. The class is now `IDisposable` — the ViewModel creates and
+disposes instances as the user navigates.
+
+**`NotesViewModel.cs`** (full rewrite) — The biggest change. The new version is built around
+`FullSyncAsync()`: on connect, parallel REST calls to `GET /folders` and `GET /notes`,
+merge by last-write-wins, push any locally-created or locally-newer items. This is the
+same offline-first pattern as every other client. The old version had a `HandleInit` method
+that explicitly dropped local-only notes with a comment "Local-only (offline-created, no
+server ID): dropped". That was never the right behaviour — it was a shortcut that worked
+when the app was online-only but breaks offline use. Fixed.
+
+**`Models.cs`** — `WsMessage` is gone. Added `NoteWsMessage` (per-note WS: `type`, `title`,
+`content`, `updated_at`), `AuthResponse` (`token`, `recovery_code`), `FolderItem.IsWastebasket`,
+and `Note.DeletedAt` (nullable `long` with `INotifyPropertyChanged`).
+
+**`MainWindow.xaml` and `MainWindow.xaml.cs`** — Auth overlay added as a second layer in
+the root Grid. Auth card with Log In / Register / Recover mode tabs, server URL field,
+email, password, recovery code, and new password fields. Sign Out button in the status bar.
+Search box in the note list column. Context menus are now context-sensitive: in the
+wastebasket view, right-click shows Restore and Delete Permanently; in any other view, it
+shows Move to Trash and a Move to Folder submenu.
+
+### The recovery code timing problem
+
+Registration shows a recovery code that the user needs to save. The first design put the
+code in an inline panel inside the auth overlay. It was never visible.
+
+The sequence: user submits register → server returns token + recovery code → ViewModel
+enqueues two `DispatcherQueue.TryEnqueue` calls: first `StateChanged` (which triggers the
+window to hide the auth overlay), then `RecoveryCode` (which would trigger the panel to
+appear). By the time the second callback ran, the auth overlay was already `Visibility.Collapsed`
+and the panel was hidden with it.
+
+Fix: make the recovery code a `ContentDialog` created entirely in code-behind. The dialog
+is shown after the auth overlay has hidden and the main view has appeared. A copy button
+lets the user get the code into their clipboard without manually selecting the text.
+
+### The `deleted_at` / `folder_id` mismatch
+
+The server represents trash state as `deleted_at: <unix ms>` on a note, with `folder_id`
+left as its original value (or null). The client uses `folder_id` as the single routing key
+for the note list — which virtual folder bucket a note belongs to.
+
+The fix is `NormaliseNote()`, called at every point notes enter the ViewModel from outside
+(REST sync, local load, WebSocket init). If `deleted_at` has a value, it sets
+`folder_id = "__wastebasket__"`. This is the same pattern the Linux and macOS clients use
+to map the server's semantic into a UI-friendly representation.
+
+### Where things stand
+
+The Windows client is now at feature parity with macOS for the core experience:
+auth (login, register, recover with recovery codes), JWT in Windows Credential Manager,
+folders (create, rename, delete), notes (create, edit, delete, move between folders),
+trash (soft delete, restore, permanent delete), search, and live sync via per-note
+WebSocket.
+
+Still missing compared to macOS and Linux: Markdown rich text, inline images, and the
+folder label shown in note list rows. Those are the next steps.
+
+> 📝 *Write here: how does it feel to finally have the Windows client running against the
+> same server as everything else? This is the platform you use every day — does opening the
+> app and seeing your notes appear feel different than testing on macOS?*
+
+---
+
+## March 14, 2026 — Windows catches up: Markdown, images, single-body editor, folder labels
+
+### The remaining gap
+
+After the sync rewrite session, the Windows client had parity with macOS on structure —
+auth, folders, notes, trash, search, live WebSocket sync — but the note editor was a plain
+text box. No formatting. No images. And the note title lived in a separate `TextBox` above
+the editor, which none of the other platforms do anymore.
+
+The five things that needed fixing were:
+
+1. Use the first line as the title, same as macOS and iOS.
+2. Show the folder name in each note list row.
+3. Make the Wastebasket button look like the New Folder button — icon on the left, anchored
+   at the bottom of the sidebar.
+4. Markdown formatting.
+5. Image paste.
+
+All five were done in a single session.
+
+### First line as title
+
+macOS introduced this idea back when it moved from a two-field editor to a single `NSTextView`.
+The note has a `title` and a `content` field internally, but the editor shows them concatenated:
+`title + "\n" + content`. When the user edits, `SplitBody()` extracts the title back out at
+the first newline.
+
+The Windows version had never adopted this. It had a dedicated `TextBox` with placeholder
+"Title" and a separate `TextBox` for the body. That works, but it's visually different from
+every other client and adds a field the user has to consciously click into.
+
+Fix: remove the title `TextBox`, replace with a single `RichEditBox` that holds the full
+body. `BodyFrom(note)` concatenates; `SplitBody(body)` splits at the first `\n`. `FlushNote`
+calls `SplitBody` to extract title and content before saving. Identical to how the macOS
+and iOS apps work.
+
+### Markdown with `RichEditBox`
+
+The reason to use `RichEditBox` (rather than keeping a plain `TextBox`) is that Markdown
+styling requires per-character formatting — different font sizes for headings, bold weight
+for `**spans**`, italic for `_spans_`, strikethrough for `~~spans~~`. `TextBox` is uniform
+formatting only.
+
+`RichEditBox` exposes `ITextDocument.GetRange(start, end)` which returns an `ITextRange`.
+Each range has `CharacterFormat` with properties for `Size`, `Bold`, `Italic`,
+`Strikethrough`, and `ForegroundColor`. That's everything needed for Markdown rendering.
+
+The implementation follows the same visual rules as macOS and Linux:
+- First line (title): 20 pt, bold, regardless of its content
+- `# Heading`: 22 pt bold, marker dimmed to grey
+- `## Heading`: 18 pt bold, marker dimmed
+- `### Heading`: 15 pt bold, marker dimmed
+- `- item` / `* item`: marker dimmed
+- `- [ ]`: marker dimmed
+- `- [x]`: marker dimmed, `[x]` green, rest of line struck-through
+- `**bold**`: bold weight
+- `_italic_`: italic
+- `~~strikethrough~~`: strikethrough
+
+`ApplyMarkdownFormatting()` runs in two passes per line: first the block-level rules
+(heading or bullet or first-line), then inline spans via `ApplyInlineSpan()` which scans
+for paired markers.
+
+Two guard flags prevent the most painful WinUI pitfall: `_suppressEditorChanged` stops
+`TextChanged` from firing during programmatic `SetText`; `_applyingFormat` stops
+`TextChanged` from firing when `CharacterFormat` assignments trigger the event.
+Without both, you get infinite loops. The formatter is debounced at 120 ms
+(a separate timer from the 500 ms save debounce) to avoid per-keystroke layout invalidation.
+
+`RichEditBox` uses `\r` as paragraph separator internally, and `GetText` always appends a
+trailing `\r\0`. `GetBody()` strips exactly one trailing `\0` and one trailing `\r`, then
+converts all remaining `\r` to `\n` before returning. This is the kind of thing that
+takes an hour to figure out the first time.
+
+### Folder labels in note rows
+
+The note model has a `FolderId` field but no `FolderName`. The ViewModel knows both, but
+the DataTemplate in the note `ListView` only has access to `Note` properties.
+
+The fix: add `FolderName` as a `[JsonIgnore]` property on `Note` that implements
+`INotifyPropertyChanged`. The ViewModel calls `UpdateNoteFolder(note)` (and
+`UpdateNoteFolderNames()` for all notes) after every sync, folder rename, and note move.
+When `FolderName` changes, it fires the `FolderLabel` property change too — `FolderLabel`
+is a computed string that returns "—" for unfiled notes. The DataTemplate binds to
+`FolderLabel` with `Mode=OneWay`, so the row refreshes automatically whenever the folder
+name changes.
+
+### Wastebasket button
+
+Previously the Wastebasket was in the `FolderItems` `ObservableCollection`, rendered by
+the same `ListView` as real folders. This caused subtle problems: the Wastebasket sentinel
+would be included in "Move to Folder" submenus, renamed if a right-click happened to
+land on it, and its selection state was erased whenever `RebuildFolderItems()` ran.
+
+The new design removes it from the collection entirely and places it as a XAML `Button` in
+Row 1 of the sidebar's three-row Grid — above the "New Folder" button, below the folder
+ListView. It matches the "New Folder" button exactly: left-aligned icon (trash glyph),
+text label, same padding and border. A `_wastebasketSelected` bool tracks whether it's the
+active view; when it is, `AccentButtonStyle` is applied. When the user clicks a real folder
+in the `ListView`, the `SelectionChanged` handler clears `_wastebasketSelected` and removes
+the accent style.
+
+### Inline images
+
+`RichEditBox` has a built-in Ctrl+V that pastes bitmaps as OLE objects. OLE objects are
+opaque to the `ITextDocument` API — there is no way to get the pixel data back out to
+serialize for sync. If we let the default paste run, images become unreadable blobs
+embedded in the document.
+
+The fix: intercept Ctrl+V in `NoteRichEditBox_KeyDown`. Check whether the clipboard
+contains a bitmap. If so, set `e.Handled = true` (suppresses the default paste) and
+handle it manually: decode the clipboard bitmap with `BitmapDecoder`, re-encode as PNG
+with `BitmapEncoder`, save the bytes to `%APPDATA%\amadeuz\blobs\{id}.png`, queue a
+background `PUT /blobs/{id}` upload, then insert `![](amadeuz://blob/{id})` at the
+cursor position as plain text. This is exactly the same pattern as macOS and Linux.
+
+The Ctrl key detection uses `Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)`.
+WinUI 3 does not expose a simple `Keyboard.IsKeyDown()` helper the way WPF does — you
+have to ask the input subsystem directly.
+
+### Where things stand
+
+The Windows client now has full visual and functional parity with macOS and Linux for
+the everyday note-taking experience. All five gaps are closed. The feature matrix is green
+across the board for Windows on everything except the offline blob queue
+(images inserted while offline are not re-uploaded on reconnect — the macOS/iOS
+`pending_blobs.json` pattern hasn't been ported yet).
+
+> 📝 *Write here: the first time you pasted a screenshot into a Windows note and watched it
+> sync to your phone — what did that feel like? This is the moment where it stops being
+> "an app I'm building" and starts being "a tool I actually use". Is there a specific note
+> or image that was the first real use, not a test?*
+
+---
+
+## March 15, 2026 — Throwing out WinUI 3 and starting over with WPF
+
+### The problem with WinUI 3
+
+The WinUI 3 client worked. All the features were there. But the build and packaging story
+was a mess, and it kept getting messier.
+
+The list of papercuts that accumulated:
+
+- `WindowsAppSDKSelfContained=true` bundles WinAppSDK native DLLs. Those DLLs are
+  version-locked to a specific Windows build and crash on Windows Insider Preview with a
+  `CoreMessagingXP.dll` version mismatch. So self-contained publish — the whole point of
+  distributing an app without a runtime install — didn't actually work.
+- Without `SelfContained`, the publish output was missing resource files. A custom MSBuild
+  target (`CopyPriFilesToPublish`) was needed to copy `*.pri` files to the output folder,
+  because the normal WinUI build pipeline doesn't do this when self-containment is off.
+- `dotnet publish` fails entirely on WinUI 3 PRI generation. The `ExpandPriContent` MSBuild
+  task requires VS-installed tools not present in the dotnet SDK. Publish requires
+  `MSBuild.exe` from a full Visual Studio installation.
+- `WindowsAppSdkBootstrapInitialize=true` must be set explicitly in the csproj. Without it,
+  the app crashes silently before XAML loads — `STATUS_FAIL_FAST_EXCEPTION` with no useful
+  error message.
+- The target machine needs the Windows App Runtime 1.8 installed separately. The app shows
+  a download dialog on first run on a new machine, which is fine for personal use but is a
+  friction point for sharing.
+
+Each of these had a workaround. But the workarounds were fragile, each one was specific to
+a particular combination of SDK and Windows build version, and debugging any one of them
+consumed several hours without producing insight that would transfer to any other problem.
+
+> 📝 *Write here: what was the moment you decided to stop patching and start over?
+> Was there a specific build failure that pushed you over the edge, or was it the
+> accumulated weight of a dozen small annoyances?*
+
+### The rewrite
+
+WPF with .NET 9. `dotnet build`. It works. That's it.
+
+No runtime install needed on the target machine with `--self-contained`. No custom MSBuild
+targets. No `pri` file archaeology. No bootstrap init ceremony. The same `dotnet publish`
+command that works for every other .NET app works here.
+
+The architecture is identical to the WinUI 3 client: same file structure, same API surface,
+same sync logic, same MVVM pattern. The rewrite was mechanical — swapping WinUI 3 controls
+for WPF equivalents, replacing WinRT APIs with BCL equivalents, and updating the data
+binding syntax. The `ObservableCollection` diffs, the debounce timers, the per-note
+WebSocket lifecycle — all of it moved over unchanged.
+
+The only genuinely new decisions were about the styling library and the credential store.
+
+### The styling library hunt
+
+WPF out of the box looks like 2010. For a notes app that's supposed to feel native on
+Windows 11, that's not acceptable. The obvious choice is `Wpf.Ui` by lepoco — it's the
+most-cited modern WPF styling library, has good documentation, and is actively maintained.
+
+The problem: the NuGet package ID is `WPF.UI`. That ID is squatted by an unrelated
+Chinese package — `WPF.UI 3.1.0`, targeting net40, last updated years ago. When you run
+`dotnet add package Wpf.Ui`, you get the squatter. There is no `Wpf.Ui` (lowercase) on
+nuget.org that resolves to lepoco's library from a standard package add. You can work around
+it by specifying an exact version or a specific source, but it's a trap that will catch
+anyone following the standard docs.
+
+ModernWpfUI (0.9.6) installs cleanly and provides everything needed:
+- `ui:WindowHelper.UseModernWindowStyle="True"` — Fluent chrome on the window
+- `AccentButtonStyle` and `TextBlockButtonStyle` — the two button styles used in the app
+- `ui:ControlHelper.PlaceholderText` — attached property for placeholder text on inputs
+- Automatic dark/light theme following (no code needed)
+
+It's not as actively maintained as lepoco's library, but for the feature set this app needs,
+it's sufficient. If a migration to `Wpf.Ui` becomes necessary later (via explicit source or
+package ID workaround), the controls map 1:1.
+
+### The credential store
+
+WinUI 3 used `Windows.Security.Credentials.PasswordVault` (Windows Credential Manager) via
+WinRT. In plain WPF, WinRT APIs are not available without P/Invoke interop. For a credential
+store, that complexity is unnecessary.
+
+DPAPI (`System.Security.Cryptography.ProtectedData`) is available in the .NET BCL. It
+encrypts with the current user's Windows login credentials — equivalent security for the
+single-user use case. The token is stored as an encrypted binary at
+`%APPDATA%\amadeuz\token.dat`. `Protect` on write, `Unprotect` on read, `File.Delete` on
+sign out. Twenty lines of code, no interop, no third-party library.
+
+### Where things stand
+
+The WPF client builds with `dotnet build`. It has feature parity with the WinUI 3 client
+it replaces. The old WinUI 3 code lives in `notes/windows/` and is preserved for reference
+if any of the WinUI 3-specific patterns (Mica backdrop, `RichEditBox` formatting) are
+needed as a reference point.
+
+The offline blob queue is still the one missing feature — images inserted while offline are
+not re-uploaded on reconnect. That gap exists on Linux too and follows the `pending_blobs.json`
+pattern already implemented on macOS and iOS.
+
+> 📝 *Write here: does the WPF app feel different to use compared to the WinUI 3 one?
+> Is there anything that looks or behaves noticeably differently to a user, or is it
+> indistinguishable? The WinUI 3 Mica backdrop is gone — does that matter?*
