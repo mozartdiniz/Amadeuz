@@ -35,3 +35,26 @@ win32console = "0.1"
 
 [build-dependencies]
 glib-build-tools = "0.20"
+
+# --- Packaging (cargo-packager) ---
+
+[package.metadata.packager]
+product_name = "Amadeuz Notes"
+# Simple alphanumeric identifier required by WiX
+identifier = "com.amadeuz.notes"
+version = "0.1.0"
+authors = ["Amadeuz"]
+publisher = "Amadeuz"
+description = "Self-hosted, privacy-first notes"
+category = "Utility"
+
+formats = ["wix"]
+
+# GTK DLLs bundled alongside the exe in the installer
+resources = [
+  "C:/gtk-build/gtk/x64/release/bin/*.dll"
+]
+
+[[package.metadata.packager.binaries]]
+path = "amadeuz-notes"
+main = true
