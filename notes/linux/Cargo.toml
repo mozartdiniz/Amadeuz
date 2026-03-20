@@ -2,49 +2,36 @@
 name = "amadeuz-notes"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
-
-[[bin]]
-name = "amadeuz-notes"
-path = "src/main.rs"
 
 [dependencies]
+# ... (suas dependências comuns: anyhow, log, gtk4, adw, tokio, etc)
 anyhow = "1.0"
 log = "0.4"
 pretty_env_logger = "0.5"
-
-# GTK4 / Libadwaita
 gtk = { package = "gtk4", version = "0.10", features = ["gnome_46"] }
 adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
 glib = "0.21"
-
-# Async runtime
 tokio = { version = "1", features = ["full"] }
-
-# HTTP + WebSocket
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
-
-# Credentials — cross-platform keychain (Secret Service on Linux, WCM on Windows)
-keyring = { version = "3", features = ["linux-secret-service-rt-tokio-crypto-rust"] }
-
-# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# Utilities
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 async-channel = "2"
-
-# Markdown parsing (pure Rust, no system deps)
 pulldown-cmark = { version = "0.12", default-features = false }
 
-# Windows-only: restore stdout/stderr when launched from a terminal
+# --- Platform-Specific Dependencies ---
+
+# No Linux, usamos as features para Secret Service
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["linux-native", "crypto-rust"] }
+
+# No Windows, usamos apenas o necessário para o Credential Manager
 [target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 win32console = "0.1"
 
 [build-dependencies]
-# Compile GResource XML into a binary blob (Windows builds only; see build.rs)
 glib-build-tools = "0.20"
