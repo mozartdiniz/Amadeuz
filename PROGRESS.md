@@ -232,99 +232,51 @@ Note model includes `deleted_at` (Int64, optional) for trash state.
 
 ---
 
-## Windows (Electron)
+## Windows (Rust + GTK4 + Libadwaita — same codebase as Linux)
 
-**Status:** Not started — fresh Electron rewrite. All features pending.
-**Location:** `notes/windows-electron/` (to be created)
-**Stack:** Electron + HTML/CSS/JS (Node.js main process, renderer process)
+**Status:** Build infrastructure complete. Pending first run on a Windows machine.
+**Location:** `notes/linux/` (shared source; Windows binary produced by `build-windows.ps1`)
+**Stack:** Rust + GTK4 + Libadwaita — same as Linux. GTK4 runtime via gvsbuild on Windows.
 
 > **Note:** Previous WPF client (`notes/windows-wpf/`) is preserved as legacy reference.
 > Previous WinUI 3 client (`notes/windows/`) is also preserved.
 
-### Why the switch from WinUI 3 to WPF
+### Build (Windows)
 
-WinUI 3 / WinAppSDK accumulated several packaging and build issues:
-- `WindowsAppSDKSelfContained=true` bundled native DLLs incompatible with Windows Insider Preview
-- `dotnet publish` fails on WinUI 3 PRI generation — MSBuild from VS required
-- Bootstrap init (`WindowsAppSdkBootstrapInitialize=true`) crashes silently if omitted
-- Target machine requires Windows App Runtime 1.8 installed separately
+**Prerequisites:**
+- Rust (rustup) + MSVC toolchain
+- GTK4 via gvsbuild at `C:\gtk-build\gtk\x64\release` (includes bin/, lib/, include/)
 
-WPF avoids all of these. `dotnet build` and `dotnet run` work cleanly. Self-contained
-publish is `dotnet publish -r win-x64 --self-contained`. No runtime install required.
-
-The preferred styling library `Wpf.Ui` (by lepoco) is effectively unavailable from nuget.org —
-the `WPF.UI` package ID is squatted by an unrelated Chinese package (`WPF.UI 3.1.0`, net40 only).
-**ModernWpfUI** (0.9.6) was used instead — it provides Fluent Design / Windows 10/11 styling
-without external DLL complications.
-
-### Stack
-
-| Layer | Choice |
-|-------|--------|
-| Language | C# |
-| Framework | WPF (.NET 9) |
-| Styling | ModernWpfUI 0.9.6 |
-| MVVM base | CommunityToolkit.Mvvm 8.4.0 (`ObservableObject`, `[ObservableProperty]`) |
-| Thread marshaling | `Dispatcher.BeginInvoke` |
-| Credential store | DPAPI (`ProtectedData`) — `%APPDATA%\amadeuz\token.dat` |
-
-### What it does
-
-- **Auth**: Login / Register / Recover overlay (full-screen card) with server URL, email, password, recovery-code, and new-password fields. Mode tabs switch between Log In / Register / Recover. Recovery code shown in a `MessageBox` after registration or recovery. JWT stored via DPAPI at `%APPDATA%\amadeuz\token.dat`.
-- **Three-column layout**: folder sidebar | note list | note editor
-- **Folder sidebar**: "All Notes" sentinel → user folders → "Wastebasket" sentinel (pinned at bottom). Create/rename/delete folders via right-click context menu (blocked on sentinels). "New Folder" button at bottom.
-- **Note list**: sorted by `updatedAt` descending; title, date, content preview. Search bar filters in real time. Right-click → Move to Trash (normal view) or Restore / Delete Permanently (wastebasket view). Move to Folder submenu lists all user folders.
-- **Single-body `RichTextBox` editor**: first line is the title; remaining lines are the body. Disabled until a note is selected.
-- **Markdown formatting**: visual formatting via `TextRange` / `Run` inline properties — `# / ## / ###` headings, bullets, checkboxes, `**bold**`, `_italic_`, `~~strikethrough~~`. Format pass debounced at 120 ms.
-- **Inline images**: Ctrl+V with an image on the clipboard saves to `%APPDATA%\amadeuz\blobs\{id}.png`, queues upload via `PUT /blobs/{id}`, inserts `![](amadeuz://blob/{id})` at the cursor.
-- **Folder label in note list rows**: each row shows folder icon + folder name (or "—" for unfoldered notes).
-- 500 ms debounce on any change → save locally + REST PATCH to server.
-- **Full offline-first**: loads `data.json` on startup; works without server. On connect: full sync — REST GET /folders + GET /notes, merges by last-write-wins, pushes any offline-created or locally-newer notes/folders.
-- **Per-note WebSocket**: opens when a note is selected (`GET /notes/:id/ws?token=<jwt>`); receives live title+content updates from other clients; auto-reconnects every 3 s.
-- **Trash (soft delete)**: "Wastebasket" virtual folder shows notes with `deleted_at` set. `PATCH /notes/:id/trash` / `PATCH /notes/:id/restore` / `DELETE /notes/:id`.
-- **Move note**: right-click → Move to Folder submenu; `PATCH /notes/:id/move`.
-- **Search**: search box → `Vm.SetSearchQuery()` → filtered `ObservableCollection` diff.
-- **Sign Out**: clears state, deletes DPAPI token file, shows auth overlay.
-- Green/red status dot; ModernWpfUI system theme watching for dark/light mode.
-
-### Virtual folder sentinels
-
-| Sentinel | Meaning |
-|----------|---------|
-| `"__all__"` | All Notes — shows all active (non-trashed) notes |
-| `"__wastebasket__"` | Wastebasket — shows notes where `deleted_at != null` |
-
-### Local storage
-`%APPDATA%\amadeuz\data.json`
-```json
-{ "folders": [...], "notes": [...] }
+**Build:**
+```powershell
+cd notes/linux
+.\build-windows.ps1
+# output: build-windows\amadeuz-notes.exe + GTK DLLs
 ```
 
-### Settings storage
-`%APPDATA%\amadeuz\settings.json` — JSON `{ "serverAddress": "http://..." }`
-Default server: `http://localhost:8080`
+The script installs the `x86_64-pc-windows-msvc` Rust target if missing, sets all GTK
+environment variables, injects the `MESON_*` compile-time config vars, runs `cargo build --release`,
+and copies the binary + GTK DLLs to `build-windows\`.
 
-### Credential storage
-`%APPDATA%\amadeuz\token.dat` — DPAPI-encrypted JWT (no WinRT available in plain WPF).
-`ProtectedData.Protect` / `ProtectedData.Unprotect` with `DataProtectionScope.CurrentUser`.
+**No Meson or blueprint-compiler needed on Windows.** The pre-compiled `.ui` files are committed
+to `data/resources/ui/`. `build.rs` bundles them into an embedded GResource via `glib_build_tools`.
 
-### Key files
-| File | Role |
-|------|------|
-| `MainWindow.xaml` | Two-layer Grid: notes UI + full-screen auth overlay; DataTemplates for folder/note lists; SearchBox; auth card with mode tabs |
-| `MainWindow.xaml.cs` | Auth overlay show/hide; mode tab switching; recovery code display; context-sensitive right-click menus; search wiring |
-| `NotesViewModel.cs` | Auth, `FullSync`, CRUD, trash/restore/move, search filter, debounce, per-note WS lifecycle, offline-first merge. `ObservableObject` base via CommunityToolkit.Mvvm; `[ObservableProperty]` for bound properties; `Dispatcher.BeginInvoke` for thread marshaling. |
-| `ApiClient.cs` | All REST calls (auth, folders, notes); DPAPI token store; `WsUrlForNote`; `NormaliseUrl` |
-| `Models.cs` | `Folder`, `Note` (with `DeletedAt`, `INotifyPropertyChanged`), `FolderItem` (with `IsWastebasket`/`IsSpecial`), `NoteWsMessage`, `AuthResponse` |
-| `LocalStore.cs` | Read/write `data.json` (folders + notes) via `System.Text.Json` |
-| `SyncService.cs` | Per-note `ClientWebSocket` wrapper, `NoteWsMessage` delivery, auto-reconnect every 3 s |
+### Key differences from Linux
 
-### ModernWpfUI notes
-- `ui:WindowHelper.UseModernWindowStyle="True"` on the Window — enables Fluent chrome
-- `AccentButtonStyle` and `TextBlockButtonStyle` available as static resources
-- `ui:ControlHelper.PlaceholderText` attached property for placeholder text on inputs
-- System theme watching included — app follows Windows dark/light mode automatically
-- No Mica backdrop (WPF does not support DWM backdrop APIs directly; requires P/Invoke)
+| Aspect | Linux | Windows |
+|--------|-------|---------|
+| GResource | Installed by Meson, runtime-loaded | Embedded at compile time by `build.rs` |
+| UI files | `.blp` compiled by Meson + blueprint-compiler | Pre-compiled `.ui` XML committed to repo |
+| Keychain | Secret Service (D-Bus) via `keyring` crate | Windows Credential Manager via `keyring` crate |
+| Build tool | `meson setup build && ninja -C build` | `.\build-windows.ps1` |
+| Distribution | Flatpak / deb / system install | Portable folder (exe + GTK DLLs) |
+
+### Why the switch from WinUI 3 / WPF / Electron
+
+WinUI 3, WPF, and Electron were all attempted and abandoned (packaging failures, toolchain
+friction, or never started). The Windows client is now the Linux GTK4 app compiled for Windows.
+See the Linux section for full feature details and source layout. See the "Key differences from
+Linux" table above for what changes between the two builds.
 
 ---
 
@@ -346,7 +298,7 @@ Default server: `http://localhost:8080`
 | UI definition | Blueprint 0.18 (`.blp` files → compiled to `.ui` by Meson) |
 | Build system | Meson 1.8 + Cargo |
 | Config | GSettings (`com.amadeuz.Notes.gschema.xml`) |
-| Credentials | `secret-service` crate v3 (D-Bus Secret Service / GNOME Keyring) |
+| Credentials | `keyring` crate v3 (Secret Service on Linux, WCM on Windows — same crate both platforms) |
 | Async | Tokio (multi-thread) + tokio-tungstenite 0.26 + reqwest 0.12 |
 | Markdown | `pulldown-cmark` 0.12 (pure Rust) — TextTag formatting + image detection |
 | Channel | `async_channel` 2 (tokio → GTK main thread; glib::Sender removed in glib 0.21) |
@@ -357,7 +309,7 @@ Default server: `http://localhost:8080`
 **Dev build (local, not sandboxed):**
 ```bash
 # Install dependencies (Fedora)
-sudo dnf install meson cargo rust libadwaita-devel libsecret-devel blueprint-compiler
+sudo dnf install meson cargo rust libadwaita-devel blueprint-compiler
 
 cd notes/linux
 meson setup build --prefix=$HOME/.local -Dprofile=development
@@ -423,7 +375,7 @@ notes/linux/
         ├── mod.rs
         ├── api_client.rs    ← REST API client (reqwest, all endpoints)
         ├── local_store.rs   ← load/save data.json via glib::user_data_dir()
-        ├── keyring.rs       ← JWT store/load/delete via secret-service crate
+        ├── keyring.rs       ← JWT store/load/delete via keyring crate (cross-platform)
         └── sync_worker.rs   ← NoteSync RAII handle: WS per note, auto-reconnect, cancel via oneshot
 ```
 
@@ -449,7 +401,7 @@ notes/linux/
 - **WS callbacks must be `Sync`**: `NoteSync::connect` closures (`on_msg`, `on_status`) are called from inside `tokio::spawn`, which requires `Send + Sync`.
 - **`ObjectImpl::constructed()` for internal widget wiring**: Use this override (not `instance_init`) to wire signals between template children — template children are bound by the time `constructed()` runs.
 - **`gdk::Clipboard::read_texture_async`** returns `Result<Option<Texture>, glib::Error>` — the `Option` is `None` if the clipboard had no image data, not an error.
-- Must build via Meson — `cargo build` alone won't inject MESON_* env vars into `config.rs`.
+- On Linux: must build via Meson — `cargo build` alone won't inject MESON_* env vars or compile blueprints. On Windows: `.\build-windows.ps1` injects the vars directly.
 
 ### Primary reference
 

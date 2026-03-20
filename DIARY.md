@@ -2683,3 +2683,78 @@ After the rebuild, the app appeared in the GNOME app grid and launched correctly
 The Linux client is now a proper installable application on Fedora. `./build-flatpak.sh` from the
 `notes/linux/` directory handles everything: prerequisite installation, cargo vendoring, and Flatpak
 build + install. Subsequent rebuilds are incremental (cargo + flatpak-builder both cache aggressively).
+
+---
+
+## 2026-03-20 — Windows via GTK4: compiling the Linux app for Windows
+
+### The decision
+
+The Windows client has been through WinUI 3, WPF, and was slated for Electron — every attempt
+ended with either packaging hell or giving up on "native." The Electron fallback never even got
+started. Meanwhile the Linux GTK4 client became the most complete implementation across all
+platforms.
+
+The insight: GTK4 and Libadwaita run natively on Windows too, via gvsbuild. If the Linux app
+already has full feature parity and a mature codebase, the right move is to compile it for
+Windows rather than write a fourth Windows client from scratch.
+
+This follows the same strategy proven by another project in the repo (`external-project/`):
+a Rust + GTK4 app that cross-builds to `x86_64-pc-windows-msvc` with a single PowerShell
+script and a `build.rs` that embeds GTK resources at compile time.
+
+### What changed
+
+**GResource loading.** On Linux, resources are installed by Meson to a system path and loaded
+at runtime by the app. On Windows there is no Meson install step — `cargo build` is the whole
+build. The solution is to embed the GResource bundle at compile time using `glib_build_tools`
+in `build.rs`. `build.rs` only runs the resource compilation when `CARGO_CFG_TARGET_OS == "windows"`,
+so the Linux Meson workflow is entirely unchanged.
+
+**UI files.** Blueprint `.blp` files are the authoritative UI source on Linux — Meson runs
+`blueprint-compiler` as a build step. On Windows, `blueprint-compiler` is unavailable. The
+fix: pre-compile the three `.blp` files to standard GtkBuilder XML `.ui` files and commit them
+to `data/resources/ui/`. The `build.rs` bundles these pre-compiled files. Linux developers
+who update the UI regenerate the `.ui` files with `blueprint-compiler batch-compile`.
+
+**Keychain.** The Linux app used the `secret-service` crate directly (D-Bus, GNOME Keyring).
+Replaced with the `keyring` crate (v3), which is cross-platform: Secret Service on Linux,
+Windows Credential Manager on Windows. The API is synchronous, so the existing async wrappers
+became `tokio::task::spawn_blocking` calls. The feature flag
+`linux-secret-service-rt-tokio-crypto-rust` preserves the same backend on Linux.
+Meson no longer checks for `libsecret-1` as a system dependency — the `keyring` crate uses
+D-Bus directly, not the libsecret C library.
+
+**Config.** `config.rs` injected Meson build vars (`MESON_APP_ID`, etc.) and panicked if they
+were missing. Relaxed to `unwrap_or` with hardcoded defaults, so `cargo build` on either
+platform works without Meson wrapping it.
+
+**Meson.** Added a `target` option to `meson_options.txt` (for potential cross-compilation
+from Linux using `x86_64-pc-windows-gnu`). Replaced the direct `cargo` invocation in
+`src/meson.build` with `cargo_wrapper.py` (copied from `external-project/`) which handles
+the `--target` flag and copies the binary correctly regardless of triple.
+
+**`build-windows.ps1`.** A PowerShell script that sets up GTK environment variables (pointing
+to a gvsbuild GTK install at `C:\gtk-build\gtk\x64\release`), injects the `MESON_*` config
+vars as environment variables, installs the Rust target if needed, runs `cargo build --release`,
+and copies the binary + GTK DLLs to `build-windows\`.
+
+### What "Windows setup" looks like
+
+1. Install gvsbuild GTK4: `C:\gtk-build\gtk\x64\release` with `bin\`, `lib\`, `include\`
+2. Install Rust (rustup) + MSVC toolchain
+3. Clone the repo, `cd notes/linux`
+4. `.\build-windows.ps1`
+5. Run `.\build-windows\amadeuz-notes.exe`
+
+No Meson, no blueprint-compiler, no libsecret. The binary is self-contained modulo the GTK DLLs
+(which the script copies alongside the exe).
+
+### Where things stand
+
+The Linux GTK4 client is now also the Windows client. The Electron stub is abandoned. The
+feature matrix for Windows will mirror Linux as soon as the build is validated on a Windows machine.
+
+> 📝 *Write here: what did it feel like to delete the Windows Electron plan and replace it with
+> "just compile the Linux app"? Was this obvious in retrospect or did it take a while to see?
+> The GTK4-on-Windows story is underappreciated — most people assume GTK is Linux-only.*

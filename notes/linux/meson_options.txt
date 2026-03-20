@@ -4,3 +4,10 @@ option('profile',
   value: 'default',
   description: 'Build profile (development enables debug mode)',
 )
+
+option(
+  'target',
+  type: 'string',
+  value: '',
+  description: 'Cross-compilation target triple (e.g. x86_64-pc-windows-gnu). Leave empty for native compilation.',
+)

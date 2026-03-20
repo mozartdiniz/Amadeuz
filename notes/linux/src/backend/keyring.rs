@@ -1,49 +1,41 @@
 use anyhow::Result;
-use secret_service::{EncryptionType, SecretService};
-use std::collections::HashMap;
+use keyring::Entry;
 
-const LABEL: &str = "Amadeuz Notes JWT";
-const ATTR_APP: &str = "application";
-const ATTR_APP_VAL: &str = "com.amadeuz.Notes";
-const ATTR_KEY: &str = "key";
-const ATTR_KEY_VAL: &str = "jwt";
-
-fn attrs() -> HashMap<&'static str, &'static str> {
-    let mut m = HashMap::new();
-    m.insert(ATTR_APP, ATTR_APP_VAL);
-    m.insert(ATTR_KEY, ATTR_KEY_VAL);
-    m
-}
+const SERVICE: &str = "com.amadeuz.Notes";
+const USER: &str = "jwt";
 
 pub async fn load_token() -> Result<Option<String>> {
-    let ss = SecretService::connect(EncryptionType::Dh).await?;
-    let col = ss.get_default_collection().await?;
-    col.ensure_unlocked().await?;
-    let results = col.search_items(attrs()).await?;
-    match results.first() {
-        Some(item) => {
-            let secret = item.get_secret().await?;
-            Ok(Some(String::from_utf8(secret)?))
+    tokio::task::spawn_blocking(|| {
+        let entry = Entry::new(SERVICE, USER)?;
+        match entry.get_password() {
+            Ok(p) => Ok(Some(p)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!(e)),
         }
-        None => Ok(None),
-    }
+    })
+    .await?
 }
 
 pub async fn save_token(token: &str) -> Result<()> {
-    let ss = SecretService::connect(EncryptionType::Dh).await?;
-    let col = ss.get_default_collection().await?;
-    col.ensure_unlocked().await?;
-    col.create_item(LABEL, attrs(), token.as_bytes(), true, "text/plain; charset=utf8")
-        .await?;
+    let token = token.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let entry = Entry::new(SERVICE, USER)?;
+        entry.set_password(&token)?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
     Ok(())
 }
 
 pub async fn delete_token() -> Result<()> {
-    let ss = SecretService::connect(EncryptionType::Dh).await?;
-    let col = ss.get_default_collection().await?;
-    col.ensure_unlocked().await?;
-    for item in col.search_items(attrs()).await? {
-        item.delete().await?;
-    }
+    tokio::task::spawn_blocking(|| {
+        let entry = Entry::new(SERVICE, USER)?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(anyhow::anyhow!(e)),
+        }
+    })
+    .await??;
     Ok(())
 }

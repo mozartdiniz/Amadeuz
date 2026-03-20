@@ -26,8 +26,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
 
-# Credentials
-secret-service = { version = "3", features = ["rt-tokio-crypto-rust"] }
+# Credentials — cross-platform keychain (Secret Service on Linux, WCM on Windows)
+keyring = { version = "3", features = ["linux-secret-service-rt-tokio-crypto-rust"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -40,3 +40,11 @@ async-channel = "2"
 
 # Markdown parsing (pure Rust, no system deps)
 pulldown-cmark = { version = "0.12", default-features = false }
+
+# Windows-only: restore stdout/stderr when launched from a terminal
+[target.'cfg(windows)'.dependencies]
+win32console = "0.1"
+
+[build-dependencies]
+# Compile GResource XML into a binary blob (Windows builds only; see build.rs)
+glib-build-tools = "0.20"

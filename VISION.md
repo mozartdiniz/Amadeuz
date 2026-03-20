@@ -23,18 +23,19 @@ Users should not be able to tell this isn't a platform-first app.
 | macOS    | Swift + SwiftUI     |
 | iOS      | Swift + SwiftUI     |
 | Android  | Kotlin + Jetpack Compose |
-| Windows  | Electron + HTML/CSS/JS *(exception — see decisions log)* |
+| Windows  | Rust + GTK4 + Libadwaita *(same codebase as Linux)* |
 | Linux    | Rust + GTK4 + Libadwaita |
 | Server   | Go                  |
 
 Multiple platform-specific codebases are acceptable and expected.
 Shared code is good when it doesn't compromise native feel; it is never worth forcing.
 
-**Windows exception:** The Windows client has gone through WinUI 3 and WPF rewrites, both
-abandoned due to packaging failures, toolchain friction, and deployment complexity. After
-multiple failed attempts at a native Windows client, the pragmatic decision was made to use
-Electron for Windows only. The other platforms remain native. The Electron client will be
-the Windows-dedicated app — no other platform will use it.
+**Windows:** After WinUI 3 and WPF rewrites both failed (packaging issues, toolchain friction),
+and with Electron never getting off the ground, the pragmatic decision was made to compile the
+Linux GTK4 app for Windows. GTK4 runs natively on Windows via gvsbuild. The same Rust codebase
+serves both Linux and Windows — resources are embedded at compile time on Windows, and a
+PowerShell script (`build-windows.ps1`) handles the full build and DLL collection. This is
+consistent with the "native" principle: GTK4 is a real native toolkit, not a web engine wrapper.
 
 ### 2. Offline-first
 Every client loads from local disk immediately on startup and works fully without a server.
