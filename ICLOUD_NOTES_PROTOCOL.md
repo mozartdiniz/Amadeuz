@@ -232,6 +232,11 @@ Two lines ("Probe Title" / "Hello world"), created on an Apple device:
   is deleted.
 - Moving to Recently Deleted = update `Folder`, `Folders`, `FoldersModificationDate` and the
   CloudKit `parent`.
+- Recovering a note from Recently Deleted is a plain move to another folder: NotesShared has
+  no "original folder" field or recover API, only `moveBackToTrashAfterQuotaExceededErrorOnRecovery`
+  (a recovery that fails because iCloud storage is full puts the note back in the trash). **[RE]**
+- Renaming a folder = update `TitleEncrypted` + `TitleModificationDate` (as written by
+  `-[ICFolder makeCloudKitRecordForApproach:…]`). **[RE]**
 - Concurrent writes to the zone return `TRY_AGAIN_LATER` ("Sync zone CAS Op-Lock failed …
   Retry request") **[confirmed live]**: transient, retried with backoff / `retryAfter`.
 

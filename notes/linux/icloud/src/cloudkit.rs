@@ -376,6 +376,25 @@ impl ICloudClient {
         Ok(())
     }
 
+    /// Rename a folder: new `TitleEncrypted` and `TitleModificationDate`
+    /// (the fields Apple's `makeCloudKitRecord` writes for the title).
+    pub async fn rename_folder(&self, folder_id: &str, title: &str) -> Result<()> {
+        let zone_id = self.notes_zone_id().await?;
+        let rec = self.lookup(&zone_id, folder_id).await?;
+        let record = json!({
+            "recordType": "Folder",
+            "recordName": folder_id,
+            "recordChangeTag": rec["recordChangeTag"],
+            "zoneID": zone_id,
+            "fields": {
+                "TitleEncrypted": { "type": "ENCRYPTED_BYTES", "value": B64.encode(title.as_bytes()) },
+                "TitleModificationDate": { "type": "TIMESTAMP", "value": now_ms() },
+            },
+        });
+        self.modify(&zone_id, json!([{ "operationType": "update", "record": record }])).await?;
+        Ok(())
+    }
+
     /// Delete a folder as Apple Notes does from the user's point of view: its
     /// notes go to Recently Deleted, then the folder record is removed
     /// (folders don't use deletion by TTL). `notes` are the folder's note

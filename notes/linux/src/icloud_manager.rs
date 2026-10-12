@@ -52,6 +52,7 @@ pub enum ICloudEvent {
     NoteMoved { id: String, folder_id: String },
     NoteDeleted { id: String },
     FolderDeleted { id: String },
+    FolderRenamed { id: String, title: String },
     /// An iCloud action failed: (dialog title, message).
     ActionFailed(String, String),
     SyncFailed { message: String, expired: bool },
@@ -108,6 +109,7 @@ pub struct ICloudManager {
     removed_since_sync: HashSet<String>,
     folders_added_since_sync: Vec<(String, String)>,
     folders_removed_since_sync: HashSet<String>,
+    folders_renamed_since_sync: HashMap<String, String>,
     /// A save is in flight; edits made meanwhile wait in `queued`.
     saving: bool,
     /// A note is being created; further "+" presses are ignored until it lands.
@@ -131,6 +133,8 @@ pub struct ICloudManager {
     pub on_note_removed: Option<Rc<dyn Fn(String)>>,
     /// A folder was deleted; the window leaves it if it was selected.
     pub on_folder_deleted: Option<Rc<dyn Fn(String)>>,
+    /// A folder was renamed (and re-sorted); the window reselects it if needed.
+    pub on_folder_renamed: Option<Rc<dyn Fn(String)>>,
     /// A fresh snapshot replaced the stores (the open note may have changed).
     pub on_synced: Option<Rc<dyn Fn()>>,
 }
@@ -152,6 +156,7 @@ impl ICloudManager {
             removed_since_sync: HashSet::new(),
             folders_added_since_sync: Vec::new(),
             folders_removed_since_sync: HashSet::new(),
+            folders_renamed_since_sync: HashMap::new(),
             saving: false,
             creating: std::cell::Cell::new(false),
             queued: None,
@@ -167,6 +172,7 @@ impl ICloudManager {
             on_action_failed: None,
             on_note_removed: None,
             on_folder_deleted: None,
+            on_folder_renamed: None,
         }));
         (mgr, rx)
     }
@@ -303,6 +309,10 @@ impl ICloudManager {
         })
     }
 
+    pub fn note_folder_id(&self, note_id: &str) -> Option<String> {
+        self.note_folder(note_id)
+    }
+
     fn note_folder(&self, note_id: &str) -> Option<String> {
         self.find_note(note_id).map(|n| n.folder_id())
     }
@@ -382,16 +392,58 @@ impl ICloudManager {
     /// Move a note to Recently Deleted (Apple's delete).
     pub fn move_to_trash(&self, note_id: String) {
         let Some(trash) = self.trash_folder_id() else { return };
+        self.move_note(note_id, trash, "Couldn't Delete Note");
+    }
+
+    /// Move a note to another folder. Out of Recently Deleted, this is
+    /// Apple's "recover": Apple keeps no record of the original folder.
+    pub fn move_note(&self, note_id: String, folder_id: String, failure_title: &str) {
+        let client = self.client.clone();
+        let tx = self.event_tx.clone();
+        let failure_title = failure_title.to_string();
+        crate::spawn(async move {
+            let client = client.lock().await.clone();
+            let event = match client.move_note(&note_id, &folder_id).await {
+                Ok(()) => ICloudEvent::NoteMoved { id: note_id, folder_id },
+                Err(e) => ICloudEvent::ActionFailed(failure_title, e.to_string()),
+            };
+            tx.send(event).await.ok();
+        });
+    }
+
+    /// Why `folder_id` can't be renamed, if it can't.
+    pub fn folder_rename_blocker(&self, folder_id: &str) -> Option<&'static str> {
+        (folder_id == DEFAULT_FOLDER || folder_id.starts_with("TrashFolder"))
+            .then_some("Apple's built-in folders can't be renamed.")
+    }
+
+    pub fn rename_folder(&self, folder_id: String, title: String) {
         let client = self.client.clone();
         let tx = self.event_tx.clone();
         crate::spawn(async move {
             let client = client.lock().await.clone();
-            let event = match client.move_note(&note_id, &trash).await {
-                Ok(()) => ICloudEvent::NoteMoved { id: note_id, folder_id: trash },
-                Err(e) => ICloudEvent::ActionFailed("Couldn't Delete Note".into(), e.to_string()),
+            let event = match client.rename_folder(&folder_id, &title).await {
+                Ok(()) => ICloudEvent::FolderRenamed { id: folder_id, title },
+                Err(e) => ICloudEvent::ActionFailed("Couldn't Rename Folder".into(), e.to_string()),
             };
             tx.send(event).await.ok();
         });
+    }
+
+    /// Insert `folder` at its place in Apple's order ("Notes" first, A→Z,
+    /// "Recently Deleted" last).
+    fn insert_folder_sorted(&self, folder: &AmzFolder) {
+        let key = |id: &str, t: &str| (id != DEFAULT_FOLDER, id.starts_with("TrashFolder"), t.to_lowercase());
+        let new_key = key(&folder.id(), &folder.name());
+        let at = (0..self.folder_store.n_items())
+            .find(|&i| {
+                self.folder_store
+                    .item(i)
+                    .and_downcast::<AmzFolder>()
+                    .is_some_and(|f| key(&f.id(), &f.name()) > new_key)
+            })
+            .unwrap_or(self.folder_store.n_items());
+        self.folder_store.insert(at, folder);
     }
 
     /// Delete a note in Recently Deleted for good.
@@ -600,18 +652,7 @@ impl ICloudManager {
                 {
                     mgr.borrow_mut().folders_added_since_sync.push((id.clone(), title.clone()));
                     let m = mgr.borrow();
-                    // Keep Apple's order: "Notes" first, A→Z, "Recently Deleted" last.
-                    let key = |id: &str, t: &str| (id != DEFAULT_FOLDER, id.starts_with("TrashFolder"), t.to_lowercase());
-                    let new_key = key(&id, &title);
-                    let at = (0..m.folder_store.n_items())
-                        .find(|&i| {
-                            m.folder_store
-                                .item(i)
-                                .and_downcast::<AmzFolder>()
-                                .is_some_and(|f| key(&f.id(), &f.name()) > new_key)
-                        })
-                        .unwrap_or(m.folder_store.n_items());
-                    m.folder_store.insert(at, &AmzFolder::new(&id, &title, now_ms()));
+                    m.insert_folder_sorted(&AmzFolder::new(&id, &title, now_ms()));
                     icloud_cache::save(m.to_cache());
                 }
                 let cb = mgr.borrow().on_folder_created.clone();
@@ -674,6 +715,31 @@ impl ICloudManager {
                     icloud_cache::save(m.to_cache());
                 }
                 let cb = mgr.borrow().on_folder_deleted.clone();
+                if let Some(cb) = cb {
+                    cb(id);
+                }
+            }
+            ICloudEvent::FolderRenamed { id, title } => {
+                {
+                    let mut m = mgr.borrow_mut();
+                    m.folders_renamed_since_sync.insert(id.clone(), title.clone());
+                    if let Some(i) = (0..m.folder_store.n_items())
+                        .find(|&i| m.folder_store.item(i).and_downcast::<AmzFolder>().is_some_and(|f| f.id() == id))
+                    {
+                        let folder = m.folder_store.item(i).and_downcast::<AmzFolder>().unwrap();
+                        m.folder_store.remove(i);
+                        folder.set_name(title);
+                        m.insert_folder_sorted(&folder);
+                    }
+                    // Note rows show their folder's name.
+                    for note in (0..m.note_store.n_items()).filter_map(|i| m.note_store.item(i).and_downcast::<AmzNote>()) {
+                        if note.folder_id() == id {
+                            note.notify("folder-id");
+                        }
+                    }
+                    icloud_cache::save(m.to_cache());
+                }
+                let cb = mgr.borrow().on_folder_renamed.clone();
                 if let Some(cb) = cb {
                     cb(id);
                 }
@@ -812,6 +878,7 @@ impl ICloudManager {
         self.removed_since_sync.clear();
         self.folders_added_since_sync.clear();
         self.folders_removed_since_sync.clear();
+        self.folders_renamed_since_sync.clear();
     }
 
     fn apply_snapshot(&mut self, snap: Snapshot) {
@@ -829,6 +896,11 @@ impl ICloudManager {
         self.images = snap.images;
         let mut folders = snap.folders;
         folders.retain(|f| !self.folders_removed_since_sync.contains(&f.id));
+        for f in &mut folders {
+            if let Some(title) = self.folders_renamed_since_sync.get(&f.id) {
+                f.title = title.clone();
+            }
+        }
         for (id, title) in &self.folders_added_since_sync {
             if !folders.iter().any(|f| &f.id == id) {
                 folders.push(amadeuz_icloud::ICloudFolder { id: id.clone(), title: title.clone(), parent_id: None, is_trash: false });

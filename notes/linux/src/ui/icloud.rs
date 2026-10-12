@@ -87,6 +87,27 @@ impl AmzWindow {
         }
         {
             let win = self.downgrade();
+            icloud.borrow_mut().on_folder_renamed = Some(Rc::new(move |id| {
+                let Some(w) = win.upgrade() else { return };
+                let imp = w.imp();
+                // Re-sorting rebuilt the row; highlight it again without
+                // reloading the folder.
+                if imp.icloud_mode.get() && imp.icloud_filter_folder.borrow().as_deref() == Some(id.as_str()) {
+                    let index = imp.icloud.borrow().as_ref().and_then(|i| {
+                        let i = i.borrow();
+                        (0..i.folder_store.n_items())
+                            .find(|&k| i.folder_store.item(k).and_downcast::<AmzFolder>().is_some_and(|f| f.id() == id))
+                    });
+                    if let (Some(list), Some(k)) = (imp.icloud_folder_list.borrow().as_ref(), index) {
+                        if let Some(row) = list.row_at_index(k as i32) {
+                            list.select_row(Some(&row));
+                        }
+                    }
+                }
+            }));
+        }
+        {
+            let win = self.downgrade();
             icloud.borrow_mut().on_note_removed = Some(Rc::new(move |id| {
                 if let Some(w) = win.upgrade() {
                     w.on_icloud_note_removed(&id);
@@ -365,6 +386,7 @@ impl AmzWindow {
                 || note.content().to_lowercase().contains(&search)
         });
         let model = gtk::FilterListModel::new(Some(note_store), Some(filter.clone()));
+        let win_for_rows = self.downgrade();
         imp.note_list.bind_model(Some(&model), move |obj| {
             let note = obj.downcast_ref::<AmzNote>().unwrap();
             let row = AmzNoteRow::new();
@@ -379,7 +401,20 @@ impl AmzWindow {
             );
             note.connect_title_notify(refresh.clone());
             note.connect_content_notify(refresh.clone());
+            note.connect_folder_id_notify(refresh.clone());
             note.connect_updated_at_notify(refresh);
+
+            let right_click = gtk::GestureClick::new();
+            right_click.set_button(3);
+            {
+                let win_weak = win_for_rows.clone();
+                let id = note.id();
+                right_click.connect_pressed(move |g, _, x, y| {
+                    let (Some(win), Some(widget)) = (win_weak.upgrade(), g.widget()) else { return };
+                    win.show_icloud_note_menu(&id, &widget, x, y);
+                });
+            }
+            row.add_controller(right_click);
             row.upcast()
         });
         imp.icloud_filter.replace(Some(filter));
@@ -587,35 +622,115 @@ impl AmzWindow {
     }
 
     fn show_icloud_folder_menu(&self, id: &str, name: &str, widget: &gtk::Widget, x: f64, y: f64) {
-        let label = gtk::Label::new(Some("Delete Folder…"));
-        label.set_halign(gtk::Align::Start);
-        label.set_margin_start(12);
-        label.set_margin_end(12);
-        label.set_margin_top(6);
-        label.set_margin_bottom(6);
-        let row = gtk::ListBoxRow::new();
-        row.set_child(Some(&label));
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
         list.add_css_class("navigation-sidebar");
-        list.append(&row);
-
-        let popover = gtk::Popover::new();
-        popover.set_parent(widget);
-        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-        popover.set_has_arrow(false);
-        popover.set_child(Some(&list));
-        popover.connect_closed(|p| p.unparent());
+        for (label, action) in [("Rename Folder…", "rename"), ("Delete Folder…", "delete")] {
+            list.append(&menu_row(label, action));
+        }
+        let popover = context_popover(widget, x, y, &list);
         let win = self.downgrade();
         let pop = popover.downgrade();
         let (id, name) = (id.to_string(), name.to_string());
-        list.connect_row_activated(move |_, _| {
+        list.connect_row_activated(move |_, row| {
             if let Some(p) = pop.upgrade() {
                 p.popdown();
             }
-            if let Some(w) = win.upgrade() {
+            let Some(w) = win.upgrade() else { return };
+            if row.widget_name() == "rename" {
+                w.prompt_icloud_folder_rename(&id, &name, None);
+            } else {
                 w.prompt_icloud_folder_delete(&id, &name);
             }
+        });
+        popover.popup();
+    }
+
+    fn prompt_icloud_folder_rename(&self, id: &str, name: &str, error: Option<&str>) {
+        let Some(icloud) = self.imp().icloud.borrow().clone() else { return };
+        if let Some(why) = icloud.borrow().folder_rename_blocker(id) {
+            let dialog = adw::AlertDialog::new(Some("Can't Rename This Folder"), Some(why));
+            dialog.add_response("ok", "OK");
+            dialog.present(Some(self));
+            return;
+        }
+        let entry = adw::EntryRow::new();
+        entry.set_title("Folder Name");
+        entry.set_text(name);
+        entry.set_activates_default(true);
+        let group = adw::PreferencesGroup::new();
+        group.add(&entry);
+        let dialog = adw::AlertDialog::new(Some("Rename iCloud Folder"), error);
+        dialog.set_extra_child(Some(&group));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("rename", "Rename");
+        dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("rename"));
+        dialog.set_close_response("cancel");
+        let win = self.clone();
+        let (id, old) = (id.to_string(), name.to_string());
+        let focus = entry.clone();
+        dialog.connect_response(Some("rename"), move |_, _| {
+            let new = entry.text().trim().to_string();
+            if new.is_empty() {
+                win.prompt_icloud_folder_rename(&id, &old, Some("Enter a name for the folder."));
+            } else if new != old {
+                icloud.borrow().rename_folder(id.clone(), new);
+            }
+        });
+        dialog.present(Some(self));
+        focus.grab_focus();
+    }
+
+    /// Right-click on an iCloud note: move it to another folder, or (from
+    /// Recently Deleted) recover it.
+    fn show_icloud_note_menu(&self, note_id: &str, widget: &gtk::Widget, x: f64, y: f64) {
+        let Some(icloud) = self.imp().icloud.borrow().clone() else { return };
+        let (in_trash, folders) = {
+            let i = icloud.borrow();
+            let current = i.note_folder_id(note_id).unwrap_or_default();
+            let folders: Vec<AmzFolder> = (0..i.folder_store.n_items())
+                .filter_map(|k| i.folder_store.item(k).and_downcast::<AmzFolder>())
+                .filter(|f| i.is_writable_folder(&f.id()) && f.id() != current)
+                .collect();
+            (i.is_in_trash(note_id), folders)
+        };
+        let header = gtk::Label::new(Some(if in_trash { "Recover to" } else { "Move to" }));
+        header.add_css_class("heading");
+        header.set_halign(gtk::Align::Start);
+        header.set_margin_start(12);
+        header.set_margin_top(8);
+        header.set_margin_bottom(4);
+        let list = gtk::ListBox::new();
+        list.set_selection_mode(gtk::SelectionMode::None);
+        list.add_css_class("navigation-sidebar");
+        for f in &folders {
+            list.append(&menu_row(&f.name(), &f.id()));
+        }
+        let scroll = gtk::ScrolledWindow::new();
+        scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+        scroll.set_propagate_natural_height(true);
+        scroll.set_max_content_height(360);
+        scroll.set_child(Some(&list));
+        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        vbox.append(&header);
+        vbox.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        vbox.append(&scroll);
+
+        let popover = context_popover(widget, x, y, &vbox);
+        let win = self.downgrade();
+        let pop = popover.downgrade();
+        let note_id = note_id.to_string();
+        list.connect_row_activated(move |_, row| {
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
+            }
+            let Some(w) = win.upgrade() else { return };
+            if w.imp().icloud_open_note.borrow().as_deref() == Some(note_id.as_str()) {
+                w.flush_icloud_save();
+            }
+            let title = if in_trash { "Couldn't Recover Note" } else { "Couldn't Move Note" };
+            icloud.borrow().move_note(note_id.clone(), row.widget_name().to_string(), title);
         });
         popover.popup();
     }
@@ -973,4 +1088,27 @@ impl AmzWindow {
         });
         dialog.present(Some(self));
     }
+}
+
+fn menu_row(label: &str, name: &str) -> gtk::ListBoxRow {
+    let l = gtk::Label::new(Some(label));
+    l.set_halign(gtk::Align::Start);
+    l.set_margin_start(12);
+    l.set_margin_end(12);
+    l.set_margin_top(6);
+    l.set_margin_bottom(6);
+    let row = gtk::ListBoxRow::new();
+    row.set_widget_name(name);
+    row.set_child(Some(&l));
+    row
+}
+
+fn context_popover(widget: &gtk::Widget, x: f64, y: f64, child: &impl IsA<gtk::Widget>) -> gtk::Popover {
+    let popover = gtk::Popover::new();
+    popover.set_parent(widget);
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+    popover.set_has_arrow(false);
+    popover.set_child(Some(child));
+    popover.connect_closed(|p| p.unparent());
+    popover
 }

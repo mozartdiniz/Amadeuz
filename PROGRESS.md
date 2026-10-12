@@ -569,7 +569,8 @@ Default server: `ws://localhost:8080/ws`
 | Attachments: images (inline, cached in `~/.cache/amadeuz/icloud/`), tables → Markdown, links, hashtags | ✅ verified live (32/32 tables, images shown in app) |
 | Create note (plain text, probe `--create-test-note`) | ✅ verified live: shows on Mac, editable there, edits read back |
 | Create note from the GTK app ("+" in Folder Sync Test) | ✅ creates and saves; note list row now updates live after saves |
-| Folders: create (sidebar "+") / delete (right-click; notes → Recently Deleted) / rename | ⏳ create + delete built, rename ❌ |
+| Folders: create (sidebar "+") / delete / rename (right-click) | ✅ verified by user on Mac build |
+| Move notes between folders; recover from Recently Deleted (right-click on a note) | ✅ verified by user on Mac build |
 | Cached notes editable before sync finishes; local changes survive an older sync snapshot | ✅ creating during the background sync verified by user |
 | "+" menus: new iCloud note from any view, new iCloud folder from the sidebar | ✅ |
 | Busy-zone errors (`TRY_AGAIN_LATER`, HTTP 409) retried automatically; sync no longer blocks writes | ✅ |
