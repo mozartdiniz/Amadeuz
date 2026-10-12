@@ -43,8 +43,9 @@ pub struct ICloudNote {
     /// Markdown→text map, for editing ([`notebody::apply_markdown_edit`]).
     pub raw_text: Option<String>,
     pub rendered: Option<notebody::Rendered>,
-    /// Bodies stored as an asset (over 100 KB) can't be edited yet.
-    pub editable: bool,
+    /// Why this note can't be edited, if it can't (locked, too large, a body
+    /// shape the editor won't touch, …). `None` = editable.
+    pub read_only_reason: Option<String>,
     /// Why the body couldn't be decoded, if it couldn't.
     pub body_error: Option<String>,
 }
@@ -197,7 +198,20 @@ impl ICloudClient {
                 Err(e) => (None, Some(e.to_string())),
             }
         };
-        let editable = !is_locked && body.is_some() && rec["fields"].get("TextDataEncrypted").is_some();
+        // Decide up front whether the editor may touch this note, so it opens
+        // read-only with a reason instead of failing on save.
+        let read_only_reason = if is_locked {
+            Some("locked note".to_string())
+        } else if let Some(e) = &body_error {
+            Some(format!("couldn't be read: {e}"))
+        } else if body.is_none() {
+            Some("no text".to_string())
+        } else {
+            match bytes_field(rec, "TextDataEncrypted") {
+                None => Some("too large to edit yet".to_string()),
+                Some(blob) => crdt::Doc::parse(&blob).err().map(|e| e.to_string()),
+            }
+        };
         let (raw_text, rendered) = body.unzip();
         let markdown = rendered.as_ref().map(|r: &notebody::Rendered| r.text.clone());
 
@@ -224,7 +238,7 @@ impl ICloudClient {
             markdown,
             raw_text,
             rendered,
-            editable,
+            read_only_reason,
             body_error,
         })
     }

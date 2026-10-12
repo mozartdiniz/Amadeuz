@@ -8,7 +8,7 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::glib;
 
-use crate::icloud_manager::{ICloudManager, ICloudRef, ICloudStatus, SaveStatus, SignInStep, WRITABLE_FOLDER};
+use crate::icloud_manager::{ICloudManager, ICloudRef, ICloudStatus, SaveStatus, SignInStep};
 use crate::model::{AmzFolder, AmzNote};
 use crate::ui::AmzNoteRow;
 
@@ -213,6 +213,11 @@ impl AmzWindow {
         let imp = self.imp();
         let Some(icloud) = imp.icloud.borrow().clone() else { return };
         let editable = imp.text_view.is_editable();
+        let reason = imp
+            .icloud_open_note
+            .borrow()
+            .as_deref()
+            .and_then(|id| icloud.borrow().read_only_reason(id));
         let text = {
             let i = icloud.borrow();
             match (&i.status, &i.save_status) {
@@ -222,7 +227,10 @@ impl AmzWindow {
                 (ICloudStatus::Syncing, _) => "iCloud · Syncing…".to_string(),
                 (_, SaveStatus::Saved) if editable => "iCloud · Saved".to_string(),
                 _ if editable => "iCloud · Editing".to_string(),
-                _ => format!("iCloud · Read-only (editing is enabled in \"{WRITABLE_FOLDER}\" only)"),
+                _ => match reason {
+                    Some(r) => format!("iCloud · Read-only ({r})"),
+                    None => "iCloud · Read-only".to_string(),
+                },
             }
         };
         imp.status_icon.set_icon_name(Some("weather-overcast-symbolic"));
@@ -445,6 +453,13 @@ impl AmzWindow {
         let still_there = imp.icloud.borrow().as_ref().is_some_and(|i| i.borrow().body(&id).is_some());
         if still_there {
             self.open_icloud_note(&id);
+            // The list was rebuilt by the sync; highlight the open note again.
+            let index = imp.icloud_filter_model.borrow().as_ref().and_then(|m| {
+                (0..m.n_items()).find(|&i| m.item(i).and_downcast::<AmzNote>().is_some_and(|n| n.id() == id))
+            });
+            if let Some(row) = index.and_then(|i| imp.note_list.row_at_index(i as i32)) {
+                imp.note_list.select_row(Some(&row));
+            }
         } else {
             imp.icloud_open_note.replace(None);
             self.set_icloud_editable(false);

@@ -9,21 +9,19 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 use tokio::sync::Mutex;
 
+use crate::backend::icloud_cache::{self, Cache, CachedFolder, CachedNote};
 use crate::model::{AmzFolder, AmzNote};
 
 /// Apple's built-in "Notes" folder; notes without a folder land here.
 pub const DEFAULT_FOLDER: &str = "DefaultFolder-CloudKit";
-
-/// Writing to iCloud is limited to this folder until it has been verified on
-/// real devices (see PROGRESS.md).
-pub const WRITABLE_FOLDER: &str = "Folder Sync Test";
 
 /// What the editor needs to turn Markdown edits into note-text edits.
 #[derive(Clone)]
 struct EditState {
     raw: String,
     rendered: Rendered,
-    editable: bool,
+    /// Why the note can't be edited, if it can't.
+    read_only_reason: Option<String>,
 }
 
 /// Save progress for the open note, shown in the status bar.
@@ -145,8 +143,17 @@ impl ICloudManager {
         self.bodies.get(note_id).map(String::as_str)
     }
 
-    /// On launch: reuse the session saved in the keyring, if any.
+    /// On launch: show the cached notes at once, then reuse the session saved
+    /// in the keyring (if any) to sync in the background.
     pub fn restore(mgr: &ICloudRef) {
+        if let Some(cache) = icloud_cache::load() {
+            {
+                let mut m = mgr.borrow_mut();
+                m.load_cache(cache);
+                m.status = ICloudStatus::Syncing;
+            }
+            notify(mgr);
+        }
         let client = mgr.borrow().client.clone();
         let tx = mgr.borrow().event_tx.clone();
         crate::spawn(async move {
@@ -229,19 +236,29 @@ impl ICloudManager {
         });
     }
 
-    /// Whether `note_id` may be edited: decodable, not locked, and in the
-    /// writable test folder.
     pub fn can_edit(&self, note_id: &str) -> bool {
-        let in_writable_folder = self.note_folder(note_id).is_some_and(|f| self.is_writable_folder(&f));
-        in_writable_folder && self.edits.get(note_id).is_some_and(|e| e.editable)
+        self.read_only_reason(note_id).is_none()
     }
 
+    /// Why `note_id` can't be edited right now; `None` if it can.
+    pub fn read_only_reason(&self, note_id: &str) -> Option<String> {
+        if self.note_folder(note_id).is_some_and(|f| !self.is_writable_folder(&f)) {
+            return Some("in Recently Deleted".into());
+        }
+        match self.edits.get(note_id) {
+            // Cached notes carry no editing data; the background sync brings it.
+            None => Some("waiting for sync".into()),
+            Some(e) => e.read_only_reason.clone(),
+        }
+    }
+
+    /// Any folder except Apple's "Recently Deleted" (as in Apple Notes).
     pub fn is_writable_folder(&self, folder_id: &str) -> bool {
         (0..self.folder_store.n_items()).any(|i| {
             self.folder_store
                 .item(i)
                 .and_downcast::<AmzFolder>()
-                .is_some_and(|f| f.id() == folder_id && f.name() == WRITABLE_FOLDER)
+                .is_some_and(|f| f.id() == folder_id && !f.id().starts_with("TrashFolder"))
         })
     }
 
@@ -355,6 +372,7 @@ impl ICloudManager {
         self.images.clear();
         self.edits.clear();
         self.queued = None;
+        icloud_cache::delete();
         std::fs::remove_dir_all(crate::ui::md_formatter::icloud_image_path("")).ok();
         crate::spawn(async move {
             crate::backend::keyring::delete_icloud_session().await.ok();
@@ -386,6 +404,7 @@ impl ICloudManager {
                     let mut m = mgr.borrow_mut();
                     m.apply_snapshot(snap);
                     m.status = ICloudStatus::Ready;
+                    icloud_cache::save(m.to_cache());
                 }
                 notify(&mgr);
                 let cb = mgr.borrow().on_synced.clone();
@@ -399,6 +418,7 @@ impl ICloudManager {
                     m.saving = false;
                     m.save_status = SaveStatus::Saved;
                     m.apply_saved(&id, raw, rendered);
+                    icloud_cache::save(m.to_cache());
                     m.queued.take()
                 };
                 notify(&mgr);
@@ -428,7 +448,8 @@ impl ICloudManager {
                     let now = now_ms();
                     m.note_store.insert(0, &AmzNote::new(&id, "", "", &folder_id, now, now));
                     m.bodies.insert(id.clone(), String::new());
-                    m.edits.insert(id.clone(), EditState { raw: String::new(), rendered: Rendered::default(), editable: true });
+                    m.edits.insert(id.clone(), EditState { raw: String::new(), rendered: Rendered::default(), read_only_reason: None });
+                    icloud_cache::save(m.to_cache());
                 }
                 let cb = mgr.borrow().on_created.clone();
                 if let Some(cb) = cb {
@@ -449,7 +470,13 @@ impl ICloudManager {
                 {
                     let mut m = mgr.borrow_mut();
                     m.status = if message.is_empty() {
-                        // No saved session: nothing to report.
+                        // No saved session: nothing to report, and any cached
+                        // notes belong to an account that's no longer connected.
+                        m.folder_store.remove_all();
+                        m.note_store.remove_all();
+                        m.bodies.clear();
+                        m.edits.clear();
+                        icloud_cache::delete();
                         ICloudStatus::Disconnected
                     } else if expired {
                         ICloudStatus::Error("iCloud session expired. Reconnect from the main menu.".into())
@@ -481,6 +508,45 @@ impl ICloudManager {
             };
             tx.send(event).await.ok();
         });
+    }
+
+    /// Snapshot of what's shown, for the on-disk cache.
+    fn to_cache(&self) -> Cache {
+        let folders = (0..self.folder_store.n_items())
+            .filter_map(|i| self.folder_store.item(i).and_downcast::<AmzFolder>())
+            .map(|f| CachedFolder { id: f.id(), title: f.name() })
+            .collect();
+        let notes = (0..self.note_store.n_items())
+            .filter_map(|i| self.note_store.item(i).and_downcast::<AmzNote>())
+            .map(|n| {
+                let id = n.id();
+                CachedNote {
+                    body: self.bodies.get(&id).cloned().unwrap_or_default(),
+                    title: n.title(),
+                    content: n.content(),
+                    folder_id: n.folder_id(),
+                    created_at: n.created_at(),
+                    modified_at: n.updated_at(),
+                    id,
+                }
+            })
+            .collect();
+        Cache { version: 0, folders, notes, images: self.images.clone() }
+    }
+
+    fn load_cache(&mut self, cache: Cache) {
+        self.folder_store.remove_all();
+        for f in &cache.folders {
+            self.folder_store.append(&AmzFolder::new(&f.id, &f.title, 0));
+        }
+        self.note_store.remove_all();
+        self.bodies.clear();
+        self.edits.clear();
+        for n in cache.notes {
+            self.note_store.append(&AmzNote::new(&n.id, &n.title, &n.content, &n.folder_id, n.modified_at, n.created_at));
+            self.bodies.insert(n.id, n.body);
+        }
+        self.images = cache.images;
     }
 
     fn apply_saved(&mut self, id: &str, raw: String, rendered: Rendered) {
@@ -517,7 +583,7 @@ impl ICloudManager {
             if let (Some(raw), Some(rendered)) = (&n.raw_text, &n.rendered) {
                 self.edits.insert(
                     n.id.clone(),
-                    EditState { raw: raw.clone(), rendered: rendered.clone(), editable: n.editable },
+                    EditState { raw: raw.clone(), rendered: rendered.clone(), read_only_reason: n.read_only_reason.clone() },
                 );
             }
             let body = if n.is_locked {

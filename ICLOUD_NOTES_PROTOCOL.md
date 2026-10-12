@@ -218,6 +218,11 @@ Two lines ("Probe Title" / "Hello world"), created on an Apple device:
   `ICloudClient::edit_note` (`records/lookup` → edit → verify → `records/modify` `update` with
   `recordChangeTag`; `CONFLICT`/`OPLOCK` → reload).
 
+### Compression of note bodies **[confirmed live]**
+Bodies are gzip (what `ic_gzipDeflate` writes today) or, for 78 of 662 older notes, **zlib**.
+Readers must accept both; amadeuz writes gzip. With both accepted, all 661 notes with a body
+pass the editor's structural checks (`probe` → `== Editability ==`).
+
 ### Smart formatting Apple inserts **[confirmed live, `probe --smart-survey`, 662 notes]**
 Links in attribute runs (`AttributeRun.9`), by scheme: `https` 385, `mailto` 45, `tel` 23,
 `http` 23, `x-apple-data-detectors` 19 (addresses, dates; target is an opaque

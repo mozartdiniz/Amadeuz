@@ -128,13 +128,14 @@ pub fn to_markdown_with(note: &Note, attachment: &dyn Fn(&AttachmentInfo) -> Opt
 /// prefixes, fences). An attachment's rendering maps its first char to the
 /// attachment's U+FFFC. [`apply_markdown_edit`] uses this to turn an edit of the
 /// Markdown into an edit of the note text.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rendered {
     pub text: String,
     pub map: Vec<Option<usize>>,
     /// Chars amadeuz typed earlier in this editing session (same length as
     /// `map`, or empty = none). They may still turn into Markdown markup once
     /// the user finishes typing it, e.g. `#` saved, then `# ` completed.
+    #[serde(default)]
     pub typed: Vec<bool>,
 }
 

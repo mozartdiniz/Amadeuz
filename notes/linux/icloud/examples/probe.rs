@@ -133,6 +133,19 @@ async fn main() {
         println!("  decode error for {}: {}", n.id, n.body_error.as_deref().unwrap_or(""));
     }
 
+    // Which notes the editor would refuse to touch, and why (no note content).
+    let mut read_only: BTreeMap<String, usize> = BTreeMap::new();
+    for n in &snap.notes {
+        let reason = n.read_only_reason.clone().unwrap_or_else(|| "editable".into());
+        // Group detailed parser messages by their first clause.
+        let key = reason.split(':').take(2).collect::<Vec<_>>().join(":");
+        *read_only.entry(key).or_default() += 1;
+    }
+    println!("\n== Editability ==");
+    for (reason, count) in &read_only {
+        println!("  {reason:<70} × {count}");
+    }
+
     // Attachment rendering summary (no note content).
     let all_md: Vec<&str> = snap.notes.iter().filter_map(|n| n.markdown.as_deref()).collect();
     let tables = all_md.iter().map(|m| m.matches("\n|---").count()).sum::<usize>();

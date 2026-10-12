@@ -571,9 +571,11 @@ Default server: `ws://localhost:8080/ws`
 | Create note from the GTK app ("+" in Folder Sync Test) | ✅ creates and saves; note list row now updates live after saves |
 | Folders: create / rename / delete | ❌ |
 | Delete note (move to Recently Deleted) | ❌ |
-| Edit existing note (CRDT operations, Folder Sync Test only) | ⏳ used by user in Folder Sync Test without errors; Mac-side result not yet confirmed |
+| Edit existing note (CRDT operations; all folders except Recently Deleted since Oct 2026) | ⏳ used by user in Folder Sync Test without errors; Mac-side result not yet confirmed |
 | Markdown typed in amadeuz → Apple formatting (headings, lists, checklists, code, bold/italic/strike) | ⏳ checklists, bold, strikethrough verified on Mac; markup completed across several saves now converts (retest) |
 | Automatic links (data detectors, `tel:`, `mailto:`, pasted/shortened URLs) shown as plain text | ⏳ built; classified across all 662 notes by `probe --smart-survey` |
+| Offline cache: cached iCloud notes shown instantly at launch, background sync replaces them | ✅ verified by user |
+| Editor accepts every note body (gzip and zlib) | ✅ 661/661 notes editable (probe) |
 
 **Build/test:** `cd notes/linux/icloud && cargo test`
 **Live probe:** `cargo run --example probe` (interactive; `--bodies` prints note text, `--forget` deletes the saved session).
@@ -582,13 +584,13 @@ Default server: `ws://localhost:8080/ws`
 `src/ui/icloud.rs` (sidebar section built in code, so `.blp` and the hand-maintained `.ui` stay untouched),
 main menu → "Connect iCloud…". Session in the keyring under `com.amadeuz.Notes` / `icloud-session`,
 split into 600-char chunks (Windows Credential Manager caps a secret at 2560 bytes).
-iCloud notes are in memory only (re-fetched on launch), not written to `data.json`.
+iCloud notes are never written to `data.json`. A separate cache (`<user data dir>/amadeuz/icloud-cache.json`) is shown instantly at launch while a background sync runs; the sync result replaces it (remote wins). Editing data is cached only for notes in the writable folder. Disconnect deletes it.
 
 **macOS dev build:** the app also builds on macOS now (`brew install gtk4 libadwaita`; Keychain added as the
 macOS keyring backend). To run without Meson: compile `data/resources/com.amadeuz.Notes.gresource.xml` with
 `glib-compile-resources` into `<dir>/amadeuz-notes/com.amadeuz.Notes.gresource` and build with `MESON_DATADIR=<dir>`.
 
-**Test sandbox:** the iCloud folder "Folder Sync Test" is the agreed place for write experiments.
+**Test sandbox:** the iCloud folder "Folder Sync Test" is where new write features are tried first; the probe can only write there. The app edits any folder except Recently Deleted. Notes the editor won't touch (locked, >100 KB, shared/unusual body shape) open read-only with the reason in the status bar; cached notes are read-only until the background sync completes.
 
 **Flatpak:** new crates (`amadeuz-icloud` deps) need `cargo vendor` / `cargo-sources.json` regenerated before the next Flatpak build.
 

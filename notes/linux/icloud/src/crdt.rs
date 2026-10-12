@@ -15,11 +15,11 @@
 //! Anything unexpected makes parsing fail, so callers refuse the edit rather
 //! than risk damaging a note.
 
-use std::io::{Read, Write};
+use std::io::Write;
 
 use uuid::Uuid;
 
-use crate::notebody::{InlineFormat, InlineKind, ParaStyle, ParagraphFormat};
+use crate::notebody::{self, InlineFormat, InlineKind, ParaStyle, ParagraphFormat};
 use crate::wire::{Message, Value};
 use crate::{Error, Result};
 
@@ -53,6 +53,11 @@ pub struct Doc {
     text: Vec<u16>,
 }
 
+/// Parse one protobuf layer, naming it in the error.
+fn layer(b: &[u8], name: &str) -> Result<Message> {
+    Message::parse(b).map_err(|e| refuse(&format!("{name}: {e}")))
+}
+
 fn refuse(why: &str) -> Error {
     Error::Protocol(format!("note body can't be edited safely: {why}"))
 }
@@ -60,29 +65,21 @@ fn refuse(why: &str) -> Error {
 impl Doc {
     /// Parse a `TextData` blob (gzip or raw).
     pub fn parse(blob: &[u8]) -> Result<Self> {
-        let raw = match blob {
-            [0x1f, 0x8b, ..] => {
-                let mut out = Vec::new();
-                flate2::read::GzDecoder::new(blob)
-                    .read_to_end(&mut out)
-                    .map_err(|e| Error::Protocol(format!("gunzip: {e}")))?;
-                out
-            }
-            _ => blob.to_vec(),
-        };
-        let document = Message::parse(&raw)?;
+        // Same decompression as the reader (gzip, zlib or none).
+        let raw = notebody::decompress(blob)?;
+        let document = layer(&raw, "document")?;
         let versions: Vec<&[u8]> = document.all_bytes(2).collect();
         if versions.len() != 1 {
             return Err(refuse("expected exactly one document version"));
         }
-        let version = Message::parse(versions[0])?;
-        let string = Message::parse(version.bytes(3).ok_or_else(|| refuse("version has no data"))?)?;
+        let version = layer(versions[0], "version")?;
+        let string = layer(version.bytes(3).ok_or_else(|| refuse("version has no data"))?, "text")?;
 
         // Vector timestamp → replica numbering (1..n by sorted UUID).
-        let ts = Message::parse(string.bytes(4).ok_or_else(|| refuse("no vector timestamp (shared note?)"))?)?;
+        let ts = layer(string.bytes(4).ok_or_else(|| refuse("no vector timestamp (shared note?)"))?, "clock")?;
         let mut clocks = Vec::new();
         for c in ts.all_bytes(1) {
-            let c = Message::parse(c)?;
+            let c = layer(c, "clock entry")?;
             let uuid = Uuid::from_slice(c.bytes(1).ok_or_else(|| refuse("clock without replica UUID"))?)
                 .map_err(|_| refuse("bad replica UUID"))?;
             clocks.push((uuid, c));
@@ -101,12 +98,12 @@ impl Doc {
 
         let mut nodes = Vec::new();
         for s in string.all_bytes(3) {
-            let s = Message::parse(s)?;
+            let s = layer(s, "text piece")?;
             if s.field_numbers().any(|n| !(1..=5).contains(&n)) {
                 return Err(refuse("substring has unknown fields"));
             }
-            let id = Message::parse(s.bytes(1).ok_or_else(|| refuse("substring without charID"))?)?;
-            let tsid = Message::parse(s.bytes(3).ok_or_else(|| refuse("substring without timestamp"))?)?;
+            let id = layer(s.bytes(1).ok_or_else(|| refuse("substring without charID"))?, "text piece id")?;
+            let tsid = layer(s.bytes(3).ok_or_else(|| refuse("substring without timestamp"))?, "text piece timestamp")?;
             nodes.push(Node {
                 replica: replica_of(id.varint(1).unwrap_or(0))?,
                 clock: id.varint(2).unwrap_or(0) as u32,
@@ -131,7 +128,7 @@ impl Doc {
         if visible as usize != text.len() {
             return Err(refuse("substring lengths don't match the text"));
         }
-        let runs: Vec<Message> = string.all_bytes(5).map(Message::parse).collect::<Result<_>>()?;
+        let runs: Vec<Message> = string.all_bytes(5).map(|r| layer(r, "formatting run")).collect::<Result<_>>()?;
         let run_total: u64 = runs.iter().map(|r| r.varint(1).unwrap_or(0)).sum();
         if !runs.is_empty() && run_total as usize != text.len() {
             return Err(refuse("attribute runs don't cover the text"));
@@ -585,6 +582,7 @@ pub fn edit_with_formats(
 mod tests {
     use super::*;
     use crate::{newnote, notebody};
+    use std::io::Read;
 
     fn uuid(n: u8) -> Uuid {
         Uuid::from_bytes([n; 16])
@@ -640,6 +638,17 @@ mod tests {
         assert_eq!(doc.text(), "xabc");
         let replicas: Vec<_> = doc.order.iter().filter_map(|&i| doc.nodes[i].replica).collect();
         assert_eq!(replicas, vec![me, apple]);
+    }
+
+    #[test]
+    fn edits_zlib_compressed_bodies() {
+        // Older notes are zlib- rather than gzip-compressed.
+        let raw = newnote::body_proto("old note", uuid(1), uuid(9), 5);
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(&raw).unwrap();
+        let blob = z.finish().unwrap();
+        let edited = edit(&blob, "old note", "old note, edited", uuid(2)).unwrap();
+        assert_eq!(plain(&edited), "old note, edited");
     }
 
     #[test]
