@@ -46,6 +46,9 @@ pub struct ICloudNote {
     /// Why this note can't be edited, if it can't (locked, too large, a body
     /// shape the editor won't touch, …). `None` = editable.
     pub read_only_reason: Option<String>,
+    /// (record type, record name) of the note's attachments and inline items,
+    /// marked deleted along with the note.
+    pub attachments: Vec<(String, String)>,
     /// Why the body couldn't be decoded, if it couldn't.
     pub body_error: Option<String>,
 }
@@ -188,6 +191,7 @@ impl ICloudClient {
             return None;
         }
         let id = rec["recordName"].as_str()?.to_string();
+        let id_for_attachments = id.clone();
         let is_locked = rec["fields"].get("CryptoWrappedKey").is_some();
 
         let (body, body_error) = if is_locked {
@@ -239,6 +243,7 @@ impl ICloudClient {
             raw_text,
             rendered,
             read_only_reason,
+            attachments: attachments.of_note(&id_for_attachments),
             body_error,
         })
     }
@@ -300,6 +305,97 @@ impl ICloudClient {
         Ok(saved[0]["recordName"].as_str().unwrap_or(&record_name).to_string())
     }
 
+    /// Create a top-level folder. Mirrors the fields of a folder Apple Notes
+    /// created ("Folder Sync Test" dump): title, title date, minimum version.
+    /// Returns the new record name.
+    pub async fn create_folder(&self, title: &str) -> Result<String> {
+        let zone_id = self.notes_zone_id().await?;
+        let record_name = uuid::Uuid::new_v4().to_string().to_uppercase();
+        let record = json!({
+            "recordType": "Folder",
+            "recordName": record_name,
+            "zoneID": zone_id,
+            "fields": {
+                "TitleEncrypted": { "type": "ENCRYPTED_BYTES", "value": B64.encode(title.as_bytes()) },
+                "TitleModificationDate": { "type": "TIMESTAMP", "value": now_ms() },
+                "MinimumSupportedNotesVersion": { "type": "INT64", "value": 0 },
+            },
+        });
+        let saved = self.modify(&zone_id, json!([{ "operationType": "create", "record": record }])).await?;
+        Ok(saved[0]["recordName"].as_str().unwrap_or(&record_name).to_string())
+    }
+
+    /// Move a note to another folder (Apple's "delete" moves it to
+    /// `TrashFolder-CloudKit`). Changes only the folder fields and the
+    /// CloudKit parent; the body is untouched.
+    pub async fn move_note(&self, record_name: &str, folder_id: &str) -> Result<()> {
+        let zone_id = self.notes_zone_id().await?;
+        let rec = self.lookup(&zone_id, record_name).await?;
+        let folder_ref = json!({ "recordName": folder_id, "action": "VALIDATE", "zoneID": zone_id });
+        let record = json!({
+            "recordType": "Note",
+            "recordName": record_name,
+            "recordChangeTag": rec["recordChangeTag"],
+            "zoneID": zone_id,
+            "parent": { "recordName": folder_id },
+            "fields": {
+                "Folder": { "type": "REFERENCE", "value": folder_ref },
+                "Folders": { "type": "REFERENCE_LIST", "value": [folder_ref] },
+                "FoldersModificationDate": { "type": "TIMESTAMP", "value": now_ms() },
+            },
+        });
+        self.modify(&zone_id, json!([{ "operationType": "update", "record": record }])).await?;
+        Ok(())
+    }
+
+    /// Delete a note for good, as `+[ICNote deleteNote:]` does: mark the note
+    /// and its attachments `Deleted` (Note, Attachment and InlineAttachment
+    /// all use deletion by TTL; CloudKit removes marked records later).
+    /// `attachments` are (record type, record name) pairs from the snapshot.
+    pub async fn delete_note(&self, record_name: &str, attachments: &[(String, String)]) -> Result<()> {
+        let zone_id = self.notes_zone_id().await?;
+        let rec = self.lookup(&zone_id, record_name).await?;
+        let mark = |rtype: &str, name: &str, tag: Option<&Value>| {
+            let mut r = json!({
+                "recordType": rtype,
+                "recordName": name,
+                "zoneID": zone_id,
+                "fields": { "Deleted": { "type": "INT64", "value": 1 } },
+            });
+            if let Some(tag) = tag {
+                r["recordChangeTag"] = tag.clone();
+            }
+            r
+        };
+        let mut ops = vec![json!({ "operationType": "update", "record": mark("Note", record_name, Some(&rec["recordChangeTag"])) })];
+        // Attachments: only the Deleted flag changes, so no change tag needed.
+        for (rtype, name) in attachments {
+            ops.push(json!({ "operationType": "forceUpdate", "record": mark(rtype, name, None) }));
+        }
+        self.modify(&zone_id, Value::Array(ops)).await?;
+        Ok(())
+    }
+
+    /// Delete a folder as Apple Notes does from the user's point of view: its
+    /// notes go to Recently Deleted, then the folder record is removed
+    /// (folders don't use deletion by TTL). `notes` are the folder's note
+    /// record names; `trash` is the Recently Deleted folder.
+    pub async fn delete_folder(&self, folder_id: &str, notes: &[String], trash: &str) -> Result<()> {
+        for note in notes {
+            self.move_note(note, trash).await?;
+        }
+        let zone_id = self.notes_zone_id().await?;
+        let rec = self.lookup(&zone_id, folder_id).await?;
+        let record = json!({
+            "recordType": "Folder",
+            "recordName": folder_id,
+            "recordChangeTag": rec["recordChangeTag"],
+            "zoneID": zone_id,
+        });
+        self.modify(&zone_id, json!([{ "operationType": "delete", "record": record }])).await?;
+        Ok(())
+    }
+
     /// Change a note's text from `base_text` (what the caller last saw) to
     /// `new_text`, as CRDT edits from this installation's replica. Fails with
     /// [`Error::Conflict`] if the note changed on the server since, and refuses
@@ -340,50 +436,64 @@ impl ICloudClient {
     }
 
     async fn lookup(&self, zone_id: &Value, record_name: &str) -> Result<Value> {
-        let resp = self
-            .http
-            .post(self.ck_url("records/lookup")?)
-            .query(&self.client_params())
-            .json(&json!({ "records": [{ "recordName": record_name }], "zoneID": zone_id }))
-            .send()
-            .await?;
-        if resp.status().as_u16() == 401 || resp.status().as_u16() == 421 {
-            return Err(Error::SessionExpired);
-        }
-        let data = expect_json(resp).await?;
-        let rec = data["records"][0].clone();
-        if let Some(code) = rec["serverErrorCode"].as_str() {
-            return Err(Error::Protocol(format!("records/lookup: {code}: {}", rec["reason"].as_str().unwrap_or(""))));
-        }
-        Ok(rec)
+        let body = json!({ "records": [{ "recordName": record_name }], "zoneID": zone_id });
+        retrying(|| async {
+            let data = self.ck_post("records/lookup", &body).await?;
+            let rec = data["records"][0].clone();
+            if rec["serverErrorCode"].is_string() {
+                return Err(server_error("records/lookup", &rec));
+            }
+            Ok(rec)
+        })
+        .await
     }
 
     /// `records/modify`, returning the saved records; any per-record error fails the call.
+    /// `records/modify`, retrying transient server errors (busy zone,
+    /// throttling, `TRY_AGAIN_LATER`), honouring the server's `retryAfter`.
     async fn modify(&self, zone_id: &Value, operations: Value) -> Result<Vec<Value>> {
-        let resp = self
-            .http
-            .post(self.ck_url("records/modify")?)
-            .query(&self.client_params())
-            .json(&json!({ "operations": operations, "zoneID": zone_id, "atomic": true }))
-            .send()
+        retrying(|| self.modify_once(zone_id, &operations)).await
+    }
+
+    async fn modify_once(&self, zone_id: &Value, operations: &Value) -> Result<Vec<Value>> {
+        let data = self
+            .ck_post("records/modify", &json!({ "operations": operations, "zoneID": zone_id, "atomic": true }))
             .await?;
-        if resp.status().as_u16() == 401 || resp.status().as_u16() == 421 {
-            return Err(Error::SessionExpired);
-        }
-        let data = expect_json(resp).await?;
         let records = data["records"].as_array().cloned().unwrap_or_default();
         if let Some(bad) = records.iter().find(|r| r["serverErrorCode"].is_string()) {
-            // Stale recordChangeTag: someone else saved first.
-            if matches!(bad["serverErrorCode"].as_str(), Some("CONFLICT" | "OPLOCK")) {
-                return Err(Error::Conflict);
-            }
-            return Err(Error::Protocol(format!(
-                "records/modify: {}: {}",
-                bad["serverErrorCode"].as_str().unwrap_or(""),
-                bad["reason"].as_str().unwrap_or("")
-            )));
+            return Err(server_error("records/modify", bad));
         }
         Ok(records)
+    }
+
+    /// POST to a CloudKit endpoint. Errors iCloud reports in the body (with
+    /// HTTP 4xx/5xx or 200) become typed errors; transient ones become
+    /// [`Error::Retry`].
+    async fn ck_post(&self, path: &str, body: &Value) -> Result<Value> {
+        let resp = self
+            .http
+            .post(self.ck_url(path)?)
+            .query(&self.client_params())
+            .json(body)
+            .send()
+            .await?;
+        let status = resp.status().as_u16();
+        if status == 401 || status == 421 {
+            return Err(Error::SessionExpired);
+        }
+        let text = resp.text().await?;
+        let data: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if data["serverErrorCode"].is_string() {
+            return Err(server_error(path, &data));
+        }
+        match status {
+            200..=299 if !data.is_null() => Ok(data),
+            429 | 503 => Err(Error::Retry(None)),
+            _ => {
+                let snippet: String = text.chars().take(300).collect();
+                Err(Error::Protocol(format!("{path} returned {status}: {snippet}")))
+            }
+        }
     }
 
     /// Download a CloudKit asset (images, large bodies, table data).
@@ -445,6 +555,15 @@ struct Attachments {
 }
 
 impl Attachments {
+    fn of_note(&self, note_id: &str) -> Vec<(String, String)> {
+        let points_here = |r: &Value| r["fields"]["Note"]["value"]["recordName"] == note_id;
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (rtype, map) in [("Attachment", &self.records), ("InlineAttachment", &self.inline)] {
+            out.extend(map.iter().filter(|(_, r)| points_here(r)).map(|(id, _)| (rtype.to_string(), id.clone())));
+        }
+        out
+    }
+
     fn render(&self, info: &notebody::AttachmentInfo) -> Option<String> {
         let id = info.attachment_identifier.as_deref()?;
         if let Some(md) = self.tables.get(id) {
@@ -546,4 +665,73 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Map an iCloud error object (`serverErrorCode`, `reason`, `retryAfter`).
+fn server_error(what: &str, e: &Value) -> Error {
+    let code = e["serverErrorCode"].as_str().unwrap_or("");
+    match code {
+        // Stale recordChangeTag: someone else saved first.
+        "CONFLICT" | "OPLOCK" => Error::Conflict,
+        // e.g. "Sync zone CAS Op-Lock failed. There was a concurrent write …"
+        "TRY_AGAIN_LATER" | "ZONE_BUSY" | "THROTTLED" | "SERVICE_UNAVAILABLE" | "RETRY_LATER" => {
+            Error::Retry(e["retryAfter"].as_f64())
+        }
+        "AUTHENTICATION_FAILED" | "AUTHENTICATION_REQUIRED" => Error::SessionExpired,
+        _ => Error::Protocol(format!("{what}: {code}: {}", e["reason"].as_str().unwrap_or(""))),
+    }
+}
+
+/// Run `op`, retrying [`Error::Retry`] with backoff (0.5 s, 1 s, 2 s, 4 s, 8 s)
+/// or the server's `retryAfter`.
+async fn retrying<T, F, Fut>(mut op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    const ATTEMPTS: u32 = 6;
+    for attempt in 1.. {
+        match op().await {
+            Err(Error::Retry(after)) if attempt < ATTEMPTS => {
+                let backoff = 0.5 * f64::from(1u32 << (attempt - 1));
+                let wait = after.unwrap_or(backoff).clamp(0.2, 30.0);
+                log::info!("iCloud busy, retrying in {wait:.1}s (attempt {attempt})");
+                tokio::time::sleep(std::time::Duration::from_secs_f64(wait)).await;
+            }
+            Err(Error::Retry(_)) => return Err(Error::Protocol("iCloud is busy; try again in a moment".into())),
+            other => return other,
+        }
+    }
+    unreachable!("loop returns")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn busy_zone_is_retryable() {
+        // Body of the HTTP 409 seen live when two writes hit the zone at once.
+        let body = json!({
+            "uuid": "c439d45e-63c7-44d1-9b4d-1c9975a684bd",
+            "serverErrorCode": "TRY_AGAIN_LATER",
+            "reason": "Sync zone CAS Op-Lock failed. There was a concurrent write and this operation was rejected. Retry request..."
+        });
+        assert!(matches!(server_error("records/modify", &body), Error::Retry(None)));
+        let later = json!({ "serverErrorCode": "THROTTLED", "retryAfter": 3.0 });
+        assert!(matches!(server_error("x", &later), Error::Retry(Some(t)) if t == 3.0));
+        assert!(matches!(server_error("x", &json!({ "serverErrorCode": "CONFLICT" })), Error::Conflict));
+    }
+
+    #[tokio::test]
+    async fn retrying_gives_up_after_bounded_attempts() {
+        let mut calls = 0;
+        let r: Result<()> = retrying(|| {
+            calls += 1;
+            async { Err(Error::Retry(Some(0.0))) }
+        })
+        .await;
+        assert!(matches!(r, Err(Error::Protocol(_))));
+        assert_eq!(calls, 6);
+    }
 }

@@ -569,8 +569,11 @@ Default server: `ws://localhost:8080/ws`
 | Attachments: images (inline, cached in `~/.cache/amadeuz/icloud/`), tables → Markdown, links, hashtags | ✅ verified live (32/32 tables, images shown in app) |
 | Create note (plain text, probe `--create-test-note`) | ✅ verified live: shows on Mac, editable there, edits read back |
 | Create note from the GTK app ("+" in Folder Sync Test) | ✅ creates and saves; note list row now updates live after saves |
-| Folders: create / rename / delete | ❌ |
-| Delete note (move to Recently Deleted) | ❌ |
+| Folders: create (sidebar "+") / delete (right-click; notes → Recently Deleted) / rename | ⏳ create + delete built, rename ❌ |
+| Cached notes editable before sync finishes; local changes survive an older sync snapshot | ✅ creating during the background sync verified by user |
+| "+" menus: new iCloud note from any view, new iCloud folder from the sidebar | ✅ |
+| Busy-zone errors (`TRY_AGAIN_LATER`, HTTP 409) retried automatically; sync no longer blocks writes | ✅ |
+| Delete note: trash → Recently Deleted; in Recently Deleted → permanent (note + attachments `Deleted`) | ⏳ trash verified by user (needed retries); retries now automatic |
 | Edit existing note (CRDT operations; all folders except Recently Deleted since Oct 2026) | ⏳ used by user in Folder Sync Test without errors; Mac-side result not yet confirmed |
 | Markdown typed in amadeuz → Apple formatting (headings, lists, checklists, code, bold/italic/strike) | ⏳ checklists, bold, strikethrough verified on Mac; markup completed across several saves now converts (retest) |
 | Automatic links (data detectors, `tel:`, `mailto:`, pasted/shortened URLs) shown as plain text | ⏳ built; classified across all 662 notes by `probe --smart-survey` |

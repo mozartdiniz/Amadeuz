@@ -1,16 +1,19 @@
 //! On-disk copy of the iCloud notes, shown at launch while a fresh sync runs.
 //!
-//! Lives next to `data.json`. Holds what's displayed (folders, note list,
-//! Markdown bodies). Editing data is not cached: cached notes are read-only
-//! until the background sync brings fresh state. Deleted on "Disconnect iCloud".
+//! Lives next to `data.json`. Holds what's displayed plus what editing needs,
+//! so cached notes are editable before the sync finishes (a stale cache is
+//! safe: saving checks the server's text and reports a conflict). The
+//! Markdown→note map is stored as runs, which keeps the file small.
+//! Deleted on "Disconnect iCloud".
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use amadeuz_icloud::notebody::Rendered;
 use serde::{Deserialize, Serialize};
 
 /// Bump when the format changes; older caches are ignored.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Cache {
@@ -26,6 +29,7 @@ pub struct Cache {
 pub struct CachedFolder {
     pub id: String,
     pub title: String,
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +42,12 @@ pub struct CachedNote {
     pub modified_at: i64,
     /// Full Markdown shown in the editor.
     pub body: String,
+    /// Note text as Apple stores it and the Markdown map, for editing.
+    pub raw: Option<String>,
+    pub rendered: Option<Rendered>,
+    pub read_only_reason: Option<String>,
+    /// (record type, record name) of attachments, deleted with the note.
+    pub attachments: Vec<(String, String)>,
 }
 
 fn path() -> PathBuf {

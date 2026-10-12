@@ -391,6 +391,36 @@ impl AmzWindow {
         }
     }
 
+    /// Show the inline entry for a new amadeuz folder.
+    pub(super) fn start_local_folder(&self) {
+        let imp = self.imp();
+        imp.new_folder_entry.set_text("");
+        imp.new_folder_revealer.set_reveal_child(true);
+        imp.new_folder_entry.grab_focus();
+    }
+
+    /// New amadeuz note in the selected local folder (or no folder).
+    pub(super) fn create_local_note(&self) {
+        let mgr = self.imp().manager.borrow().clone();
+        let Some(mgr) = mgr else { return };
+        let folder_id = mgr.borrow().selected_folder_id.clone()
+            .filter(|id| id != "__all__" && id != super::icloud::ICLOUD_SELECTION);
+        let note_id = mgr.borrow_mut().create_note(folder_id);
+        if let Some(note_id) = note_id {
+            self.on_note_selected(&note_id);
+            // Select the row on the next GTK iteration once the filter model
+            // has had a chance to insert the new row.
+            let win2 = self.downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(w) = win2.upgrade() {
+                    if let Some(row) = w.imp().note_list.row_at_index(0) {
+                        w.imp().note_list.select_row(Some(&row));
+                    }
+                }
+            });
+        }
+    }
+
     // ── State refresh ─────────────────────────────────────────────────────────
 
     /// Rebuild the main menu to reflect the current mode and iCloud state.
@@ -1362,29 +1392,14 @@ impl AmzWindow {
         imp.new_note_button.connect_clicked(glib::clone!(
             #[weak(rename_to = win)]
             self,
-            move |_| {
+            move |button| {
                 if win.imp().icloud_mode.get() {
                     win.create_icloud_note();
-                    return;
-                }
-                let mgr = win.imp().manager.borrow().clone();
-                if let Some(mgr) = mgr {
-                    let folder_id = mgr.borrow().selected_folder_id.clone()
-                        .filter(|id| id != "__all__");
-                    let note_id = mgr.borrow_mut().create_note(folder_id);
-                    if let Some(note_id) = note_id {
-                        win.on_note_selected(&note_id);
-                        // Select the row on the next GTK iteration once the filter model
-                        // has had a chance to insert the new row.
-                        let win2 = win.downgrade();
-                        glib::idle_add_local_once(move || {
-                            if let Some(w) = win2.upgrade() {
-                                if let Some(row) = w.imp().note_list.row_at_index(0) {
-                                    w.imp().note_list.select_row(Some(&row));
-                                }
-                            }
-                        });
-                    }
+                } else if win.icloud_connected() {
+                    // Outside iCloud folders: choose amadeuz or an iCloud folder.
+                    win.show_new_note_menu(button.upcast_ref());
+                } else {
+                    win.create_local_note();
                 }
             }
         ));
@@ -1393,6 +1408,10 @@ impl AmzWindow {
             #[weak(rename_to = win)]
             self,
             move |_| {
+                if win.imp().icloud_mode.get() {
+                    win.delete_icloud_note();
+                    return;
+                }
                 let imp = win.imp();
                 let note_id = imp.manager.borrow().as_ref()
                     .and_then(|m| m.borrow().selected_note_id.clone());
@@ -1424,12 +1443,15 @@ impl AmzWindow {
         ));
 
         imp.new_folder_button.connect_clicked(glib::clone!(
-            #[weak]
-            imp,
-            move |_| {
-                imp.new_folder_entry.set_text("");
-                imp.new_folder_revealer.set_reveal_child(true);
-                imp.new_folder_entry.grab_focus();
+            #[weak(rename_to = win)]
+            self,
+            move |button| {
+                if win.icloud_connected() {
+                    // Choose amadeuz or iCloud.
+                    win.show_new_folder_menu(button.upcast_ref());
+                } else {
+                    win.start_local_folder();
+                }
             }
         ));
 

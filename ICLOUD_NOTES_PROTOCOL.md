@@ -218,6 +218,23 @@ Two lines ("Probe Title" / "Hello world"), created on an Apple device:
   `ICloudClient::edit_note` (`records/lookup` → edit → verify → `records/modify` `update` with
   `recordChangeTag`; `CONFLICT`/`OPLOCK` → reload).
 
+### Deleting **[RE]**
+- `supportsDeletionByTTL` is NO in `ICCloudSyncingObject` (so `ICFolder`), YES in
+  `ICNote`, `ICAttachment`, `ICInlineAttachment`, `ICMedia`, `ICHashtag`. TTL objects are
+  deleted by writing `Deleted` = 1 (CloudKit removes them later); others are removed with a
+  record delete.
+- `+[ICNote(Management) deleteNote:]`: deletes each attachment and inline attachment, then
+  `markForDeletion` on the note.
+- `+[ICFolder(Management) deleteFolder:]`: for each note `deleteNote:` + folder = trash +
+  `folderModificationDate` = now; recurses into child folders; then `markForDeletion` on the
+  folder. Notes in Recently Deleted observed live have `Deleted` = 0, so amadeuz follows the
+  user-visible behaviour: notes are *moved* to `TrashFolder-CloudKit`, then the folder record
+  is deleted.
+- Moving to Recently Deleted = update `Folder`, `Folders`, `FoldersModificationDate` and the
+  CloudKit `parent`.
+- Concurrent writes to the zone return `TRY_AGAIN_LATER` ("Sync zone CAS Op-Lock failed …
+  Retry request") **[confirmed live]**: transient, retried with backoff / `retryAfter`.
+
 ### Compression of note bodies **[confirmed live]**
 Bodies are gzip (what `ic_gzipDeflate` writes today) or, for 78 of 662 older notes, **zlib**.
 Readers must accept both; amadeuz writes gzip. With both accepted, all 661 notes with a body

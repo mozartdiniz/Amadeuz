@@ -2916,3 +2916,18 @@ doing: detected addresses, phone numbers, emails and shortened pasted URLs. A su
 notes (counts only, no content) sorted out which links people actually made.
 
 > 📝 *Write here: what surprised you most about how Apple stores a "simple" note?*
+
+### Addendum: deleting, and two concurrency bugs
+
+Deleting followed Apple's code again: notes, attachments and media use "deletion by TTL"
+(a `Deleted` flag, cleaned up by iCloud later), while folders are removed outright. Deleting a
+folder in amadeuz moves its notes to Recently Deleted first, which is what users see on a Mac.
+
+Two bugs showed up only in real use. First, iCloud rejects simultaneous writes to the same
+zone with "Sync zone CAS Op-Lock failed … Retry request", sent as an HTTP 409. The retry
+code existed but never ran, because it only looked for that error inside successful
+responses. Second, the background sync held a lock on the iCloud connection for its entire
+download, so every create and save quietly queued behind it. Each operation now works on its
+own copy of the connection (sharing the cookie jar) and the lock is held for an instant.
+
+> 📝 *Write here: was there a moment where "it's slow" turned out to be "it's waiting on a lock"?*

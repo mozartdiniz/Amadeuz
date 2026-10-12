@@ -33,6 +33,9 @@ pub enum Error {
     AccountActionRequired(String),
     #[error("the note changed on another device; reload it and try again")]
     Conflict,
+    /// Transient server condition; retry (after this many seconds, if given).
+    #[error("iCloud is busy; try again in a moment")]
+    Retry(Option<f64>),
     #[error("unexpected iCloud response: {0}")]
     Protocol(String),
 }

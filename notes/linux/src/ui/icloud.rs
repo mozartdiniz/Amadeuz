@@ -64,6 +64,45 @@ impl AmzWindow {
         }
         {
             let win = self.downgrade();
+            icloud.borrow_mut().on_action_failed = Some(Rc::new(move |title, msg| {
+                if let Some(w) = win.upgrade() {
+                    let dialog = adw::AlertDialog::new(Some(&title), Some(&msg));
+                    dialog.add_response("ok", "OK");
+                    dialog.present(Some(&w));
+                }
+            }));
+        }
+        {
+            let win = self.downgrade();
+            icloud.borrow_mut().on_folder_deleted = Some(Rc::new(move |id| {
+                let Some(w) = win.upgrade() else { return };
+                let imp = w.imp();
+                if imp.icloud_mode.get() && imp.icloud_filter_folder.borrow().as_deref() == Some(id.as_str()) {
+                    w.on_all_notes_selected();
+                    if let Some(row) = imp.all_notes_list.row_at_index(0) {
+                        imp.all_notes_list.select_row(Some(&row));
+                    }
+                }
+            }));
+        }
+        {
+            let win = self.downgrade();
+            icloud.borrow_mut().on_note_removed = Some(Rc::new(move |id| {
+                if let Some(w) = win.upgrade() {
+                    w.on_icloud_note_removed(&id);
+                }
+            }));
+        }
+        {
+            let win = self.downgrade();
+            icloud.borrow_mut().on_folder_created = Some(Rc::new(move |id| {
+                if let Some(w) = win.upgrade() {
+                    w.select_icloud_folder(&id);
+                }
+            }));
+        }
+        {
+            let win = self.downgrade();
             icloud.borrow_mut().on_created = Some(Rc::new(move |id| {
                 if let Some(w) = win.upgrade() {
                     w.open_created_icloud_note(&id);
@@ -118,7 +157,8 @@ impl AmzWindow {
         list.set_selection_mode(gtk::SelectionMode::Single);
         list.add_css_class("navigation-sidebar");
         let folder_store = icloud.borrow().folder_store.clone();
-        list.bind_model(Some(&folder_store), |obj| {
+        let win_weak = self.downgrade();
+        list.bind_model(Some(&folder_store), move |obj| {
             let folder = obj.downcast_ref::<AmzFolder>().unwrap();
             let icon = if folder.id().starts_with("TrashFolder") {
                 "user-trash-symbolic"
@@ -138,6 +178,19 @@ impl AmzWindow {
             row_box.append(&label);
             let row = gtk::ListBoxRow::new();
             row.set_child(Some(&row_box));
+
+            // Right-click → folder actions.
+            let right_click = gtk::GestureClick::new();
+            right_click.set_button(3);
+            {
+                let win_weak = win_weak.clone();
+                let (id, name) = (folder.id(), folder.name());
+                right_click.connect_pressed(move |g, _, x, y| {
+                    let (Some(win), Some(widget)) = (win_weak.upgrade(), g.widget()) else { return };
+                    win.show_icloud_folder_menu(&id, &name, &widget, x, y);
+                });
+            }
+            row.add_controller(right_click);
             row.upcast()
         });
         section.append(&list);
@@ -255,8 +308,8 @@ impl AmzWindow {
         if !imp.icloud_mode.get() {
             imp.icloud_mode.set(true);
             self.bind_icloud_note_list();
-            imp.delete_note_button.set_sensitive(false);
         }
+        imp.delete_note_button.set_sensitive(false);
         self.set_icloud_editable(false);
         imp.icloud_open_note.replace(None);
         let writable = imp.icloud.borrow().as_ref().is_some_and(|i| i.borrow().is_writable_folder(&folder_id));
@@ -363,6 +416,9 @@ impl AmzWindow {
         };
         icloud.borrow_mut().save_status = SaveStatus::Idle;
         imp.icloud_open_note.replace(Some(id.to_string()));
+        let in_trash = icloud.borrow().is_in_trash(id);
+        imp.delete_note_button.set_sensitive(true);
+        imp.delete_note_button.set_tooltip_text(Some(if in_trash { "Delete Permanently" } else { "Move to Trash" }));
 
         imp.loading_note.replace(true);
         imp.text_view.buffer().set_text(&body);
@@ -429,6 +485,244 @@ impl AmzWindow {
         }
     }
 
+    /// "+" outside iCloud folders: a new amadeuz note, or a new iCloud note
+    /// in a chosen folder.
+    pub(super) fn show_new_note_menu(&self, anchor: &gtk::Widget) {
+        let Some(icloud) = self.imp().icloud.borrow().clone() else { return };
+        let folders: Vec<AmzFolder> = {
+            let i = icloud.borrow();
+            (0..i.folder_store.n_items())
+                .filter_map(|k| i.folder_store.item(k).and_downcast::<AmzFolder>())
+                .filter(|f| i.is_writable_folder(&f.id()))
+                .collect()
+        };
+
+        let row = |icon: &str, label: &str, name: &str| {
+            let b = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            b.set_margin_start(10);
+            b.set_margin_end(10);
+            b.set_margin_top(6);
+            b.set_margin_bottom(6);
+            b.append(&gtk::Image::from_icon_name(icon));
+            let l = gtk::Label::new(Some(label));
+            l.set_halign(gtk::Align::Start);
+            b.append(&l);
+            let r = gtk::ListBoxRow::new();
+            r.set_widget_name(name);
+            r.set_child(Some(&b));
+            r
+        };
+        let list = |rows: Vec<gtk::ListBoxRow>| {
+            let l = gtk::ListBox::new();
+            l.set_selection_mode(gtk::SelectionMode::None);
+            l.add_css_class("navigation-sidebar");
+            for r in rows {
+                l.append(&r);
+            }
+            l
+        };
+
+        let local = list(vec![row("document-new-symbolic", "New Amadeuz Note", "__local__")]);
+        let header = gtk::Label::new(Some("New iCloud Note in"));
+        header.add_css_class("heading");
+        header.set_halign(gtk::Align::Start);
+        header.set_margin_start(12);
+        header.set_margin_top(8);
+        header.set_margin_bottom(4);
+        let remote = list(folders.iter().map(|f| row("folder-symbolic", &f.name(), &f.id())).collect());
+        let scroll = gtk::ScrolledWindow::new();
+        scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+        scroll.set_propagate_natural_height(true);
+        scroll.set_max_content_height(360);
+        scroll.set_child(Some(&remote));
+
+        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        vbox.append(&local);
+        vbox.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        vbox.append(&header);
+        vbox.append(&scroll);
+
+        let popover = gtk::Popover::new();
+        popover.set_parent(anchor);
+        popover.set_child(Some(&vbox));
+        popover.connect_closed(|p| p.unparent());
+
+        for l in [&local, &remote] {
+            let win = self.downgrade();
+            let pop = popover.downgrade();
+            l.connect_row_activated(move |_, r| {
+                if let Some(p) = pop.upgrade() {
+                    p.popdown();
+                }
+                let Some(win) = win.upgrade() else { return };
+                match r.widget_name().as_str() {
+                    "__local__" => win.create_local_note(),
+                    folder_id => win.create_icloud_note_in(folder_id),
+                }
+            });
+        }
+        popover.popup();
+    }
+
+    /// Switch to iCloud folder `folder_id` and create a note there.
+    fn create_icloud_note_in(&self, folder_id: &str) {
+        self.select_icloud_folder(folder_id);
+        self.create_icloud_note();
+    }
+
+    /// Select iCloud folder `folder_id` in the sidebar and show its notes.
+    fn select_icloud_folder(&self, folder_id: &str) {
+        let imp = self.imp();
+        let index = imp.icloud.borrow().as_ref().and_then(|i| {
+            let i = i.borrow();
+            (0..i.folder_store.n_items())
+                .find(|&k| i.folder_store.item(k).and_downcast::<AmzFolder>().is_some_and(|f| f.id() == folder_id))
+        });
+        if let (Some(list), Some(k)) = (imp.icloud_folder_list.borrow().as_ref(), index) {
+            if let Some(row) = list.row_at_index(k as i32) {
+                list.select_row(Some(&row));
+            }
+        }
+        self.on_icloud_folder_selected(folder_id.to_string());
+    }
+
+    fn show_icloud_folder_menu(&self, id: &str, name: &str, widget: &gtk::Widget, x: f64, y: f64) {
+        let label = gtk::Label::new(Some("Delete Folder…"));
+        label.set_halign(gtk::Align::Start);
+        label.set_margin_start(12);
+        label.set_margin_end(12);
+        label.set_margin_top(6);
+        label.set_margin_bottom(6);
+        let row = gtk::ListBoxRow::new();
+        row.set_child(Some(&label));
+        let list = gtk::ListBox::new();
+        list.set_selection_mode(gtk::SelectionMode::None);
+        list.add_css_class("navigation-sidebar");
+        list.append(&row);
+
+        let popover = gtk::Popover::new();
+        popover.set_parent(widget);
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.set_has_arrow(false);
+        popover.set_child(Some(&list));
+        popover.connect_closed(|p| p.unparent());
+        let win = self.downgrade();
+        let pop = popover.downgrade();
+        let (id, name) = (id.to_string(), name.to_string());
+        list.connect_row_activated(move |_, _| {
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
+            }
+            if let Some(w) = win.upgrade() {
+                w.prompt_icloud_folder_delete(&id, &name);
+            }
+        });
+        popover.popup();
+    }
+
+    fn prompt_icloud_folder_delete(&self, id: &str, name: &str) {
+        let Some(icloud) = self.imp().icloud.borrow().clone() else { return };
+        let (blocker, count) = {
+            let i = icloud.borrow();
+            (i.folder_delete_blocker(id), i.notes_in_folder(id).len())
+        };
+        if let Some(why) = blocker {
+            let dialog = adw::AlertDialog::new(Some("Can't Delete This Folder"), Some(why));
+            dialog.add_response("ok", "OK");
+            dialog.present(Some(self));
+            return;
+        }
+        let body = match count {
+            0 => "The folder is empty.".to_string(),
+            1 => "Its note will be moved to Recently Deleted in iCloud.".to_string(),
+            n => format!("Its {n} notes will be moved to Recently Deleted in iCloud."),
+        };
+        let dialog = adw::AlertDialog::new(Some(&format!("Delete \u{201c}{name}\u{201d}?")), Some(&body));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("delete", "Delete Folder");
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let id = id.to_string();
+        let win = self.clone();
+        dialog.connect_response(Some("delete"), move |_, _| {
+            win.flush_icloud_save();
+            icloud.borrow().delete_folder(id.clone());
+        });
+        dialog.present(Some(self));
+    }
+
+    /// Sidebar "+": a new amadeuz folder (inline entry, as before) or a new
+    /// iCloud folder (asks for a name).
+    pub(super) fn show_new_folder_menu(&self, anchor: &gtk::Widget) {
+        let list = gtk::ListBox::new();
+        list.set_selection_mode(gtk::SelectionMode::None);
+        list.add_css_class("navigation-sidebar");
+        for (icon, label, name) in [
+            ("folder-new-symbolic", "New Amadeuz Folder", "local"),
+            ("weather-overcast-symbolic", "New iCloud Folder…", "icloud"),
+        ] {
+            let b = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            b.set_margin_start(10);
+            b.set_margin_end(10);
+            b.set_margin_top(6);
+            b.set_margin_bottom(6);
+            b.append(&gtk::Image::from_icon_name(icon));
+            b.append(&gtk::Label::new(Some(label)));
+            let r = gtk::ListBoxRow::new();
+            r.set_widget_name(name);
+            r.set_child(Some(&b));
+            list.append(&r);
+        }
+        let popover = gtk::Popover::new();
+        popover.set_parent(anchor);
+        popover.set_child(Some(&list));
+        popover.connect_closed(|p| p.unparent());
+        let win = self.downgrade();
+        let pop = popover.downgrade();
+        list.connect_row_activated(move |_, r| {
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
+            }
+            let Some(win) = win.upgrade() else { return };
+            if r.widget_name() == "icloud" {
+                win.prompt_icloud_folder_name(None);
+            } else {
+                win.start_local_folder();
+            }
+        });
+        popover.popup();
+    }
+
+    fn prompt_icloud_folder_name(&self, error: Option<&str>) {
+        let entry = adw::EntryRow::new();
+        entry.set_title("Folder Name");
+        entry.set_activates_default(true);
+        let group = adw::PreferencesGroup::new();
+        group.add(&entry);
+        let dialog = adw::AlertDialog::new(Some("New iCloud Folder"), error);
+        dialog.set_extra_child(Some(&group));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("create", "Create");
+        dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("create"));
+        dialog.set_close_response("cancel");
+        let win = self.clone();
+        let focus = entry.clone();
+        dialog.connect_response(Some("create"), move |_, _| {
+            let name = entry.text().trim().to_string();
+            if name.is_empty() {
+                win.prompt_icloud_folder_name(Some("Enter a name for the folder."));
+                return;
+            }
+            if let Some(icloud) = win.imp().icloud.borrow().as_ref() {
+                icloud.borrow().create_folder(name);
+            }
+        });
+        dialog.present(Some(self));
+        focus.grab_focus();
+    }
+
     fn open_created_icloud_note(&self, id: &str) {
         let imp = self.imp();
         if !imp.icloud_mode.get() {
@@ -439,6 +733,47 @@ impl AmzWindow {
             imp.note_list.select_row(Some(&row));
         }
         self.open_icloud_note(id);
+    }
+
+    /// Trash button in an iCloud folder: move to Recently Deleted, or delete
+    /// for good (after asking) if it's already there.
+    pub(super) fn delete_icloud_note(&self) {
+        let imp = self.imp();
+        let Some(id) = imp.icloud_open_note.borrow().clone() else { return };
+        let Some(icloud) = imp.icloud.borrow().clone() else { return };
+        self.flush_icloud_save();
+        if !icloud.borrow().is_in_trash(&id) {
+            imp.delete_note_button.set_sensitive(false);
+            icloud.borrow().move_to_trash(id);
+            return;
+        }
+        let dialog = adw::AlertDialog::new(
+            Some("Delete Permanently?"),
+            Some("This note will be deleted from iCloud on all your devices. This can't be undone."),
+        );
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("delete", "Delete Permanently");
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let win = self.clone();
+        dialog.connect_response(Some("delete"), move |_, _| {
+            win.imp().delete_note_button.set_sensitive(false);
+            icloud.borrow().delete_permanently(id.clone());
+        });
+        dialog.present(Some(self));
+    }
+
+    /// A note was moved out of the open folder or deleted.
+    fn on_icloud_note_removed(&self, id: &str) {
+        let imp = self.imp();
+        self.refilter_icloud();
+        if imp.icloud_open_note.borrow().as_deref() == Some(id) {
+            imp.icloud_open_note.replace(None);
+            self.set_icloud_editable(false);
+            self.clear_editor();
+            imp.delete_note_button.set_sensitive(false);
+        }
     }
 
     /// After a refresh the editor may show an older version than the stores.

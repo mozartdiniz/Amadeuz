@@ -131,12 +131,65 @@ pub fn to_markdown_with(note: &Note, attachment: &dyn Fn(&AttachmentInfo) -> Opt
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rendered {
     pub text: String,
+    #[serde(with = "compact_map")]
     pub map: Vec<Option<usize>>,
     /// Chars amadeuz typed earlier in this editing session (same length as
     /// `map`, or empty = none). They may still turn into Markdown markup once
     /// the user finishes typing it, e.g. `#` saved, then `# ` completed.
-    #[serde(default)]
+    #[serde(default, with = "compact_flags")]
     pub typed: Vec<bool>,
+}
+
+/// `map` serialised as runs: `[len, start]` for `len` chars mapping to
+/// `start, start+1, …` (BMP chars) and `[len, -1]` for markup. Long stretches
+/// of plain text collapse to one entry, so caching every note stays small.
+mod compact_map {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(map: &[Option<usize>], s: S) -> Result<S::Ok, S::Error> {
+        let mut runs: Vec<(usize, i64)> = Vec::new();
+        for m in map {
+            let v = m.map_or(-1, |r| r as i64);
+            match runs.last_mut() {
+                Some((len, start)) if *start == -1 && v == -1 => *len += 1,
+                Some((len, start)) if *start >= 0 && v == *start + *len as i64 => *len += 1,
+                _ => runs.push((1, v)),
+            }
+        }
+        runs.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Option<usize>>, D::Error> {
+        let runs: Vec<(usize, i64)> = Vec::deserialize(d)?;
+        let mut out = Vec::new();
+        for (len, start) in runs {
+            for k in 0..len {
+                out.push((start >= 0).then(|| start as usize + k));
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// `typed` serialised as `[len, flag]` runs.
+mod compact_flags {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(flags: &[bool], s: S) -> Result<S::Ok, S::Error> {
+        let mut runs: Vec<(usize, bool)> = Vec::new();
+        for &f in flags {
+            match runs.last_mut() {
+                Some((len, v)) if *v == f => *len += 1,
+                _ => runs.push((1, f)),
+            }
+        }
+        runs.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<bool>, D::Error> {
+        let runs: Vec<(usize, bool)> = Vec::deserialize(d)?;
+        Ok(runs.into_iter().flat_map(|(len, v)| std::iter::repeat_n(v, len)).collect())
+    }
 }
 
 impl Rendered {
@@ -811,6 +864,21 @@ mod tests {
         }
         assert_eq!(r.map[0], None); // '#'
         assert_eq!(r.map[2], Some(0)); // 'S'
+    }
+
+    #[test]
+    fn rendered_round_trips_compactly() {
+        let note = styled_note();
+        let mut r = render(&note, &|_| None);
+        r.typed = vec![false; r.map.len()];
+        r.typed[3] = true;
+        let json = serde_json::to_string(&r).unwrap();
+        let back: Rendered = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, r);
+        // A 10 000-char plain paragraph is a single map run.
+        let long = Note { note_text: Some("x".repeat(10_000)), attribute_run: vec![] };
+        let json = serde_json::to_string(&render(&long, &|_| None)).unwrap();
+        assert!(json.len() < 10_200, "{} bytes", json.len());
     }
 
     #[test]
