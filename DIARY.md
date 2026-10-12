@@ -2931,3 +2931,17 @@ download, so every create and save quietly queued behind it. Each operation now 
 own copy of the connection (sharing the cookie jar) and the lock is held for an instant.
 
 > 📝 *Write here: was there a moment where "it's slow" turned out to be "it's waiting on a lock"?*
+
+### Addendum: first build on a real Linux desktop
+
+Until now the iCloud work had been built and tested elsewhere. The first Linux build failed
+with `no matching package named glib-build-tools`. The code was fine. An old Flatpak build had
+left `.cargo/config.toml` in the tree, and that file tells Cargo to read crates only from
+the local `vendor/` folder. The new iCloud crate had since added dependencies the folder didn't
+have. Moving `.cargo/` aside let Cargo fetch from crates.io and the build went through.
+
+For daily use, the app is now installed as a release build (`-Dprofile=default`) in a separate
+`build-release/` directory. The development profile adds `.Devel` to the app ID, which doesn't
+match the `StartupWMClass` in the desktop file, so GNOME would show it as a separate app.
+
+> 📝 *Write here: how did it feel to open your iCloud notes from the GNOME launcher?*

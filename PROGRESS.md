@@ -321,6 +321,16 @@ glib-compile-schemas ~/.local/share/glib-2.0/schemas/
 GSETTINGS_SCHEMA_DIR=~/.local/share/glib-2.0/schemas ~/.local/bin/amadeuz-notes
 ```
 
+**Release install (native, appears in GNOME app launcher):**
+```bash
+cd notes/linux
+meson setup build-release --prefix=$HOME/.local -Dprofile=default
+ninja -C build-release && meson install -C build-release
+```
+Use `-Dprofile=default` for the launcher. The development profile sets app ID `com.amadeuz.Notes.Devel`, which doesn't match the desktop file's `StartupWMClass`. `~/.local/bin` is on the GNOME session PATH and GLib finds schemas in `~/.local/share` by default, so no env vars are needed.
+
+**Gotcha:** if `notes/linux/.cargo/config.toml` exists (left behind by `build-flatpak.sh`), Cargo builds only from `vendor/`, and a native build fails with errors like `no matching package named glib-build-tools` once `Cargo.lock` gains new crates. Remove or move `.cargo/` (and `vendor/`) for native builds.
+
 **Flatpak build (sandboxed, appears in GNOME app launcher):**
 ```bash
 cd notes/linux
