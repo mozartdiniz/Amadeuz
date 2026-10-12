@@ -2758,3 +2758,161 @@ feature matrix for Windows will mirror Linux as soon as the build is validated o
 > 📝 *Write here: what did it feel like to delete the Windows Electron plan and replace it with
 > "just compile the Linux app"? Was this obvious in retrospect or did it take a while to see?
 > The GTK4-on-Windows story is underappreciated — most people assume GTK is Linux-only.*
+
+---
+
+## 2026-10-12 — Reverse engineering Apple Notes' iCloud sync
+
+The goal for this session: figure out how Apple Notes talks to iCloud, so that the GTK client
+(which is also the Windows client now) can read and edit the same notes. No implementation
+yet. This was a research session.
+
+### What Notes.app actually does
+
+The first surprise was how little is in Notes.app itself. The executable's entitlements tell
+the story: `com.apple.developer.icloud-services = CloudKit`, container `com.apple.notes`. Notes
+never opens a socket to iCloud. It builds `CKRecord` objects and hands them to CloudKit, which
+hands them to a system daemon (`cloudd`), which does the networking.
+
+The second surprise: the interesting code isn't on disk. `NotesShared.framework` (where the
+sync logic lives) only exists inside macOS's dyld shared cache, a single giant pre-linked
+blob of every system library. Grepping the cache for field names produced nothing useful. The
+fix was `ipsw dyld extract`, which pulls one library back out as a normal Mach-O file. The
+third-party Homebrew tap for `ipsw` was refused by Homebrew's untrusted-tap policy; the same
+tool is in homebrew-core, so that's what got installed.
+
+With the framework extracted, REA + Hopper decompiled the two methods that matter:
+`-[ICNote(CloudKit) makeCloudKitRecordForApproach:mergeableFieldState:]` (every field of the
+`Note` record) and `addNoteBodyToRecord:` (how the body gets attached). The full field list is
+in `ICLOUD_NOTES_PROTOCOL.md`.
+
+### The decision: web API, not the native transport
+
+Copying the native transport would mean pretending to be an Apple device, because `cloudd`
+authenticates with tokens tied to registered hardware. Instead, the plan is CloudKit Web
+Services, the JSON API that icloud.com uses. Worth being precise about: this is *not* a
+web app in a native wrapper. The GTK UI stays 100% native; the Rust code just makes HTTPS
+requests to the same API the website uses.
+
+It goes in the Rust client, not the Go server, so the Apple session stays on the user's machine.
+
+### The catch: note bodies are CRDTs
+
+The note body isn't text. It's a serialized `ICTTMergeableString`, a CRDT ("topotext") with
+per-replica timestamps. Apple devices *merge* what they receive instead of overwriting.
+Reading is straightforward (decode, take the text). Writing is where it gets hard: if we
+upload a body built from scratch, an iPhone may merge it with its own history and show
+duplicated text. Edits have to be real CRDT operations from our own replica ID.
+
+### Where things stand
+
+- Protocol research documented in `ICLOUD_NOTES_PROTOCOL.md`, with evidence tags
+  (observed vs. public vs. unknown)
+- Decision logged in VISION.md
+- Nothing implemented yet. Next: sign-in + read-only listing in the Rust client, then
+  create, then edit (CRDT), then delete
+
+> 📝 *Write here: why did you want iCloud access in the first place? Is this about migrating
+> away from iCloud, or living in both worlds? That framing matters for the blog post.*
+
+---
+
+## 2026-10-12 (later) — First contact with iCloud, then the GTK side
+
+The protocol crate (`notes/linux/icloud`, no GTK dependency) got its first real run against
+an actual account through a small command-line probe. The password check worked first time,
+which was the part I was most nervous about: Apple's SRP variant has a few quirks (password
+key derived with PBKDF2 over a SHA-256 of the password, leading-zero stripping inside the
+hash) and getting any of them wrong just looks like "wrong password".
+
+2FA did not work first time. Apple answered the sign-in with a 409 (meaning "2FA needed"),
+but no code ever appeared on any device, and "resend" returned 405. The fix came from looking
+at what the icloud.com page actually does: after the 409 it loads the account's 2FA options
+(`GET /appleauth/auth`), and *that* request is what makes Apple push the code. The resend
+endpoint was also wrong (`…/verify/trusteddevice/securitycode`, not `…/verify/trusteddevice`).
+The lesson: when copying a web client's protocol, copy its request sequence, not just
+its endpoints.
+
+After that, every note in the account decoded. Two small surprises: some notes have no
+`Folder` field at all (their placement lives in a separate per-user `Note_UserSpecific`
+record), and titles can contain line breaks.
+
+Then the GTK side. The decision that mattered: iCloud notes get their own stores and never
+touch the existing note store, because that store is saved to disk and synced to the Amadeuz
+server. One shared list would have quietly uploaded someone's iCloud notes to a different
+server. The note list is re-bound to the iCloud model while an iCloud folder is selected, and
+the editor becomes read-only.
+
+The Windows keyring turned up one more trap: Windows Credential Manager caps a secret at
+2560 bytes, and an iCloud session (tokens plus cookies) is bigger. The session is now split
+across several keyring entries.
+
+### Where things stand
+
+- Sign-in, 2FA and listing work against Apple's live servers (probe)
+- GTK app: "Connect iCloud…" in the main menu, iCloud folders in the sidebar, notes readable;
+  it compiles and launches, but the dialogs haven't been clicked through yet
+- Next: real-world UI test, then creating notes, then CRDT-safe editing
+
+> 📝 *Write here: what was it like seeing your own notes, years of them, come out of Apple's
+> servers into code you wrote? Was there a moment of "this is actually going to work"?*
+
+### Addendum: attachments, and a keychain mistake
+
+Images and tables were showing as `[public.png]` and `[com.apple.notes.table]`: the note text
+only holds a placeholder that points at a separate `Attachment` record. Images now follow
+`Attachment → Media → file`, or use Apple's preview image for formats GTK can't decode (HEIC,
+scans, PDFs). Tables turned out to be a second CRDT document inside the attachment: rows and
+columns are ordered sets of UUIDs, and cells are a dictionary keyed column-then-row. All 32
+tables in a real account decoded on the first run.
+
+The mistake: to fit Windows' 2560-byte limit on stored secrets, I split the iCloud session
+across many keyring entries, on every platform. On macOS every Keychain item asks for
+access separately, and an unsigned dev build counts as a new app on every rebuild, so one
+launch meant typing the login password over and over (22 items). Splitting is now
+Windows-only, and the session is only rewritten when it actually changed. A fix for one
+platform's limit shouldn't be applied to the platforms that don't have it.
+
+### Addendum: the first note written to iCloud
+
+Creating a note meant answering one question first: what does a brand-new note look like?
+Apple's code (via REA) gave the structure of the CRDT archive: a versioned, gzipped document
+holding the text, a list of "substrings" (who inserted what, when, which comes next), a
+vector clock and formatting runs. What the code couldn't show was the exact starting state.
+So we created a two-line note on a Mac and dumped it field by field with a generic protobuf
+printer.
+
+The new note turned out to be tiny: a start marker, one substring with the text, an end
+marker, a clock saying "this device has typed N characters", and one formatting run. The
+encoder reproduces that dump exactly, and a unit test compares the two field by field.
+
+Then the real test: amadeuz wrote a note, the Mac showed it, text, a checklist and a table
+were added on the Mac, and amadeuz read the edited version back. That last part is what
+matters. It means Apple's merge code accepted our document as a legitimate starting point
+and kept building on it.
+
+> 📝 *Write here: how did it feel to see a note you created from your own code show up in
+> Apple Notes on the Mac, and then edit it there?*
+
+### Addendum: editing, and teaching the editor what Apple meant
+
+Editing existing notes needed one more answer from Apple's code: where inserted text goes.
+`insertAttributedString:after:before:` splices the new piece into the graph between its
+neighbours, so position is fixed by the graph edges rather than by any ordering rule. Deleted
+text is split out and marked deleted, never removed, and style changes get a Lamport timestamp
+from a second "style" clock. amadeuz now does the same, at the protobuf wire level, so fields
+it doesn't understand (fonts, underline, colours) pass through untouched.
+
+The editor shows Markdown, but Apple stores plain text plus formatting runs. The bridge is a
+map from every Markdown character to the note-text character it came from; markup the renderer
+added maps to nothing. That made it possible to turn Markdown typed in amadeuz (`## `,
+`- [ ] `, `**bold**`) into real Apple formatting instead of literal characters.
+
+Two lessons from testing with real notes. First, debounced saves cut typing at arbitrary
+points: a `#` saved alone became text, and the finished `## Heading` then stayed literal.
+The fix was to remember which characters amadeuz itself typed in the session, so they can
+still turn into markup. Second, a lot of what looks like links in Apple Notes is Apple's own
+doing: detected addresses, phone numbers, emails and shortened pasted URLs. A survey of 662
+notes (counts only, no content) sorted out which links people actually made.
+
+> 📝 *Write here: what surprised you most about how Apple stores a "simple" note?*

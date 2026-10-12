@@ -550,3 +550,47 @@ Default server: `ws://localhost:8080/ws`
 - Mobile layout uses a navigation drawer instead of a persistent column sidebar
 - No persistent three-column view (not appropriate for phone screens)
 - Context menus accessed via `MoreVert` (⋮) icon buttons rather than right-click
+
+---
+
+## iCloud Notes connector (in progress, October 2026)
+
+**Goal:** CRUD the user's own iCloud notes from the Rust GTK client (Linux + Windows).
+**Research:** `ICLOUD_NOTES_PROTOCOL.md`. **Decision:** VISION.md decisions log.
+**Location:** `notes/linux/icloud/`, a standalone crate `amadeuz-icloud` with no GTK dependency, so it builds and tests on macOS too.
+
+| Step | Status |
+|------|:------:|
+| Apple ID sign-in (SRP-6a) + 2FA (trusted device or SMS) | ✅ verified live |
+| Session save/restore (tokens + cookies → keyring) | ✅ reuse confirmed with the probe (app relaunch not yet reported); single keyring entry except on Windows (split for the 2560-byte cap) |
+| List folders + notes (CloudKit `changes/zone`) | ✅ verified live (655 notes, 19 folders) |
+| Decode note body → Markdown | ✅ 655/655 decoded live; Markdown fidelity not yet reviewed |
+| GTK integration (sign-in + 2FA dialogs, iCloud sidebar section, read-only viewer) | ✅ verified by user: all notes in correct folders, new Apple-side folder appears |
+| Attachments: images (inline, cached in `~/.cache/amadeuz/icloud/`), tables → Markdown, links, hashtags | ✅ verified live (32/32 tables, images shown in app) |
+| Create note (plain text, probe `--create-test-note`) | ✅ verified live: shows on Mac, editable there, edits read back |
+| Create note from the GTK app ("+" in Folder Sync Test) | ✅ creates and saves; note list row now updates live after saves |
+| Folders: create / rename / delete | ❌ |
+| Delete note (move to Recently Deleted) | ❌ |
+| Edit existing note (CRDT operations, Folder Sync Test only) | ⏳ used by user in Folder Sync Test without errors; Mac-side result not yet confirmed |
+| Markdown typed in amadeuz → Apple formatting (headings, lists, checklists, code, bold/italic/strike) | ⏳ checklists, bold, strikethrough verified on Mac; markup completed across several saves now converts (retest) |
+| Automatic links (data detectors, `tel:`, `mailto:`, pasted/shortened URLs) shown as plain text | ⏳ built; classified across all 662 notes by `probe --smart-survey` |
+
+**Build/test:** `cd notes/linux/icloud && cargo test`
+**Live probe:** `cargo run --example probe` (interactive; `--bodies` prints note text, `--forget` deletes the saved session).
+
+**GTK side:** `src/icloud_manager.rs` (separate stores, event channel like `NotesManager`),
+`src/ui/icloud.rs` (sidebar section built in code, so `.blp` and the hand-maintained `.ui` stay untouched),
+main menu → "Connect iCloud…". Session in the keyring under `com.amadeuz.Notes` / `icloud-session`,
+split into 600-char chunks (Windows Credential Manager caps a secret at 2560 bytes).
+iCloud notes are in memory only (re-fetched on launch), not written to `data.json`.
+
+**macOS dev build:** the app also builds on macOS now (`brew install gtk4 libadwaita`; Keychain added as the
+macOS keyring backend). To run without Meson: compile `data/resources/com.amadeuz.Notes.gresource.xml` with
+`glib-compile-resources` into `<dir>/amadeuz-notes/com.amadeuz.Notes.gresource` and build with `MESON_DATADIR=<dir>`.
+
+**Test sandbox:** the iCloud folder "Folder Sync Test" is the agreed place for write experiments.
+
+**Flatpak:** new crates (`amadeuz-icloud` deps) need `cargo vendor` / `cargo-sources.json` regenerated before the next Flatpak build.
+
+**Quirks:** this Mac has Rust 1.87, and some current crate versions need 1.88+. Generate the
+lockfile with `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo generate-lockfile`.
