@@ -6,6 +6,7 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib, CompositeTemplate, TemplateChild};
 
 use crate::config;
+use crate::icloud_manager::ICloudRef;
 use crate::manager::{ManagerRef, NotesManager, WASTEBASKET_ID};
 use crate::model::{AmzFolder, AmzNote};
 use crate::ui::{AmzAuthView, AmzNoteRow};
@@ -79,6 +80,22 @@ mod imp {
         pub note_filter: RefCell<Option<gtk::CustomFilter>>,
         // The FilterListModel wrapping note_store — stored so row-activated can look up note by index.
         pub note_filter_model: RefCell<Option<gtk::FilterListModel>>,
+
+        // iCloud (read-only) — see ui/icloud.rs.
+        pub icloud: RefCell<Option<ICloudRef>>,
+        /// True while an iCloud folder is selected: note_list shows iCloud notes.
+        pub icloud_mode: std::cell::Cell<bool>,
+        pub icloud_section: RefCell<Option<gtk::Box>>,
+        pub icloud_header: RefCell<Option<gtk::Label>>,
+        pub icloud_folder_list: RefCell<Option<gtk::ListBox>>,
+        pub icloud_filter_folder: RefCell<Option<String>>,
+        pub icloud_filter: RefCell<Option<gtk::CustomFilter>>,
+        pub icloud_filter_model: RefCell<Option<gtk::FilterListModel>>,
+        pub icloud_phones: RefCell<Vec<amadeuz_icloud::TrustedPhone>>,
+        pub icloud_progress: RefCell<Option<adw::Dialog>>,
+        /// Record name of the iCloud note in the editor.
+        pub icloud_open_note: RefCell<Option<String>>,
+        pub icloud_debounce: RefCell<Option<glib::SourceId>>,
     }
 
     #[glib::object_subclass]
@@ -95,6 +112,8 @@ mod imp {
             klass.install_action("win.show-about", None, |win, _, _| win.show_about());
             klass.install_action("win.show-preferences", None, |win, _, _| win.show_preferences());
             klass.install_action("win.sign-out", None, |win, _, _| win.sign_out());
+            klass.install_action("win.icloud-connect", None, |win, _, _| win.show_icloud_sign_in(None));
+            klass.install_action("win.icloud-disconnect", None, |win, _, _| win.prompt_icloud_disconnect());
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
@@ -289,6 +308,16 @@ impl AmzWindow {
             });
         }
 
+        self.bind_local_note_list(&mgr);
+
+        imp.manager.replace(Some(mgr));
+        self.refresh_ui();
+    }
+
+    /// Bind note_list to the local/server note store (the default view).
+    /// Also called when leaving an iCloud folder, which rebinds note_list.
+    pub(super) fn bind_local_note_list(&self, mgr: &ManagerRef) {
+        let imp = self.imp();
         // Bind note store to note_list via a FilterListModel.
         // GTK4 explicitly states that ListBox::set_filter_func is incompatible
         // with bind_model — filtering must be done at the model level instead.
@@ -360,14 +389,37 @@ impl AmzWindow {
                 row.upcast()
             });
         }
-
-        imp.manager.replace(Some(mgr));
-        self.refresh_ui();
     }
 
     // ── State refresh ─────────────────────────────────────────────────────────
 
-    fn refresh_ui(&self) {
+    /// Rebuild the main menu to reflect the current mode and iCloud state.
+    pub(super) fn rebuild_menu(&self) {
+        let imp = self.imp();
+        let offline_mode = imp.manager.borrow().as_ref().is_some_and(|m| m.borrow().offline_mode);
+        let section1 = gio::Menu::new();
+        if offline_mode {
+            section1.append(Some("_Return to Start"), Some("win.sign-out"));
+        } else {
+            section1.append(Some("_Server Settings"), Some("win.show-preferences"));
+            section1.append(Some("_Sign Out"), Some("win.sign-out"));
+        }
+        let icloud_section = gio::Menu::new();
+        if self.icloud_connected() {
+            icloud_section.append(Some("Disconnect _iCloud"), Some("win.icloud-disconnect"));
+        } else {
+            icloud_section.append(Some("Connect _iCloud…"), Some("win.icloud-connect"));
+        }
+        let section2 = gio::Menu::new();
+        section2.append(Some("_About Amadeuz Notes"), Some("win.show-about"));
+        let menu = gio::Menu::new();
+        menu.append_section(None, &section1);
+        menu.append_section(None, &icloud_section);
+        menu.append_section(None, &section2);
+        imp.menu_button.set_menu_model(Some(&menu));
+    }
+
+    pub(super) fn refresh_ui(&self) {
         let imp = self.imp();
         let Some(mgr) = imp.manager.borrow().clone() else { return };
 
@@ -376,22 +428,7 @@ impl AmzWindow {
             (m.is_authenticated, m.is_connected, m.offline_mode, m.selected_note_id.clone(), m.selected_folder_id.clone())
         };
 
-        // Rebuild menu to reflect current mode.
-        {
-            let section1 = gio::Menu::new();
-            if offline_mode {
-                section1.append(Some("_Return to Start"), Some("win.sign-out"));
-            } else {
-                section1.append(Some("_Server Settings"), Some("win.show-preferences"));
-                section1.append(Some("_Sign Out"), Some("win.sign-out"));
-            }
-            let section2 = gio::Menu::new();
-            section2.append(Some("_About Amadeuz Notes"), Some("win.show-about"));
-            let menu = gio::Menu::new();
-            menu.append_section(None, &section1);
-            menu.append_section(None, &section2);
-            imp.menu_button.set_menu_model(Some(&menu));
-        }
+        self.rebuild_menu();
 
         if is_authenticated || offline_mode {
             imp.main_stack.set_visible_child_name("main");
@@ -435,6 +472,9 @@ impl AmzWindow {
                     }
                     self.on_note_selected(&id);
                 }
+            }
+            if imp.icloud_mode.get() {
+                self.update_icloud_status_bar();
             }
         } else {
             // After sign-out or on first launch without a token, go to the
@@ -585,6 +625,7 @@ impl AmzWindow {
     // ── Folder / note selection ───────────────────────────────────────────────
 
     fn on_folder_selected(&self, folder_id: Option<String>) {
+        self.leave_icloud_mode();
         let imp = self.imp();
         if folder_id.is_some() {
             imp.all_notes_list.unselect_all();
@@ -604,7 +645,8 @@ impl AmzWindow {
         self.clear_editor();
     }
 
-    fn on_all_notes_selected(&self) {
+    pub(super) fn on_all_notes_selected(&self) {
+        self.leave_icloud_mode();
         let imp = self.imp();
         imp.folder_list.unselect_all();
         imp.wastebasket_list.unselect_all();
@@ -623,6 +665,7 @@ impl AmzWindow {
     }
 
     fn on_wastebasket_selected(&self) {
+        self.leave_icloud_mode();
         let imp = self.imp();
         imp.all_notes_list.unselect_all();
         imp.folder_list.unselect_all();
@@ -714,6 +757,10 @@ impl AmzWindow {
         if *imp.loading_note.borrow() {
             return;
         }
+        if imp.icloud_mode.get() {
+            self.schedule_icloud_save();
+            return;
+        }
         let Some(mgr) = imp.manager.borrow().clone() else { return };
         let note_id = mgr.borrow().selected_note_id.clone();
         let Some(note_id) = note_id else { return };
@@ -724,7 +771,7 @@ impl AmzWindow {
         NotesManager::schedule_save(mgr, note_id, title, content);
     }
 
-    fn clear_editor(&self) {
+    pub(super) fn clear_editor(&self) {
         let imp = self.imp();
         *imp.loading_note.borrow_mut() = true;
         imp.text_view.buffer().set_text("");
@@ -1187,7 +1234,7 @@ impl AmzWindow {
 
     /// Schedule one `embed_images` call for the next GLib iteration.
     /// Uses `embed_pending` so rapid typing doesn't pile up callbacks.
-    fn schedule_image_embed(&self) {
+    pub(super) fn schedule_image_embed(&self) {
         let imp = self.imp();
         if *imp.embed_pending.borrow() {
             return;
@@ -1298,6 +1345,10 @@ impl AmzWindow {
                 let idx = row.index();
                 if idx < 0 { return; }
                 let imp = win.imp();
+                if imp.icloud_mode.get() {
+                    win.on_icloud_note_activated(idx as u32);
+                    return;
+                }
                 let model_ref = imp.note_filter_model.borrow();
                 let Some(model) = model_ref.as_ref() else { return };
                 let Some(obj) = model.item(idx as u32) else { return };
@@ -1312,6 +1363,10 @@ impl AmzWindow {
             #[weak(rename_to = win)]
             self,
             move |_| {
+                if win.imp().icloud_mode.get() {
+                    win.create_icloud_note();
+                    return;
+                }
                 let mgr = win.imp().manager.borrow().clone();
                 if let Some(mgr) = mgr {
                     let folder_id = mgr.borrow().selected_folder_id.clone()
@@ -1420,11 +1475,14 @@ impl AmzWindow {
         md_formatter::setup_tags(&imp.text_view.buffer());
 
         // Key controller for smart list continuation on Enter.
+        // Not for iCloud notes: it would type a literal "- " into Apple's text.
         {
             let key_ctrl = gtk::EventControllerKey::new();
             let buf = imp.text_view.buffer();
+            let win_weak = self.downgrade();
             key_ctrl.connect_key_pressed(move |_, key, _, _| {
-                if key == gdk::Key::Return || key == gdk::Key::KP_Enter {
+                let icloud = win_weak.upgrade().is_some_and(|w| w.imp().icloud_mode.get());
+                if !icloud && (key == gdk::Key::Return || key == gdk::Key::KP_Enter) {
                     if md_formatter::handle_enter_key(&buf) {
                         return glib::Propagation::Stop;
                     }
@@ -1518,6 +1576,7 @@ impl AmzWindow {
                     if let Some(f) = imp.note_filter.borrow().as_ref() {
                         f.changed(gtk::FilterChange::Different);
                     }
+                    win.refilter_icloud();
                 }
             }
         ));
@@ -1535,6 +1594,7 @@ impl AmzWindow {
                 if let Some(f) = imp.note_filter.borrow().as_ref() {
                     f.changed(gtk::FilterChange::Different);
                 };
+                win.refilter_icloud();
             }
         ));
 
@@ -1549,7 +1609,7 @@ fn split_title_content(text: &str) -> (String, String) {
     }
 }
 
-fn folder_name_for(folder_store: &gio::ListStore, folder_id: &str) -> String {
+pub(super) fn folder_name_for(folder_store: &gio::ListStore, folder_id: &str) -> String {
     if folder_id.is_empty() {
         return String::new();
     }

@@ -630,6 +630,8 @@ pub fn embed_images(
             blob_cache_path(blob_id)
         } else if let Some(filename) = path.strip_prefix("amz-image://") {
             image_store_dir(note_id).join(filename)
+        } else if let Some(attachment_id) = path.strip_prefix("icloud://") {
+            icloud_image_path(attachment_id)
         } else {
             expand_path(&path)
         };
@@ -685,6 +687,23 @@ pub fn image_store_dir(note_id: &str) -> std::path::PathBuf {
 /// Mirrors what the macOS BlobStore does in ~/Library/Application Support/amadeuz/blobs/.
 pub fn blob_cache_path(blob_id: &str) -> std::path::PathBuf {
     glib::user_data_dir().join("amadeuz").join("blobs").join(blob_id)
+}
+
+/// Local cache for iCloud note images (`icloud://{attachment id}`).
+pub fn icloud_image_path(attachment_id: &str) -> std::path::PathBuf {
+    glib::user_cache_dir().join("amadeuz").join("icloud").join(attachment_id)
+}
+
+/// Extract all `icloud://{attachment id}` image references from note content.
+pub fn icloud_image_ids(content: &str) -> Vec<String> {
+    content
+        .match_indices("](icloud://")
+        .filter_map(|(i, m)| {
+            let rest = &content[i + m.len()..];
+            let id = &rest[..rest.find(')')?];
+            (!id.is_empty()).then(|| id.to_string())
+        })
+        .collect()
 }
 
 /// Extract all `amadeuz://blob/{id}` references from note content.

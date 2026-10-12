@@ -2,6 +2,7 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 
+use crate::icloud_manager::{self, ICloudManager};
 use crate::manager::NotesManager;
 use crate::ui::AmzWindow;
 
@@ -79,6 +80,13 @@ mod imp {
             // Create window and wire it to the manager.
             let win = AmzWindow::new(&*app);
             win.set_manager(mgr.clone());
+
+            // iCloud Notes (read-only), independent of the Amadeuz account.
+            let (icloud, icloud_rx) = ICloudManager::new();
+            icloud_manager::attach(&icloud, icloud_rx);
+            win.set_icloud(icloud.clone());
+            ICloudManager::restore(&icloud);
+
             self.window.set(win.clone()).unwrap();
             win.present();
 

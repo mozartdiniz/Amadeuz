@@ -21,6 +21,7 @@ uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 async-channel = "2"
 pulldown-cmark = { version = "0.12", default-features = false }
+amadeuz-icloud = { path = "icloud" }
 
 # --- Platform-Specific Dependencies ---
 
@@ -32,6 +33,10 @@ keyring = { version = "3", features = ["linux-native", "crypto-rust"] }
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 win32console = "0.1"
+
+# On macOS (development only), Keychain
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
 
 [build-dependencies]
 glib-build-tools = "0.20"

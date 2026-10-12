@@ -4,6 +4,7 @@
 mod app;
 mod backend;
 mod config;
+mod icloud_manager;
 mod manager;
 mod model;
 mod ui;

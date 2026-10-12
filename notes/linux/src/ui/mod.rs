@@ -1,5 +1,6 @@
 mod auth;
-mod md_formatter;
+mod icloud;
+pub(crate) mod md_formatter;
 mod note_row;
 mod window;
 
