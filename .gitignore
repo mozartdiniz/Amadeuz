@@ -65,3 +65,5 @@ legacy-code
 node_modules
 node_modules/*
 notes/windows-electron/node_modules
+# Claude Code per-machine settings
+.claude/settings.local.json
