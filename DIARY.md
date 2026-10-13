@@ -2945,3 +2945,15 @@ For daily use, the app is now installed as a release build (`-Dprofile=default`)
 match the `StartupWMClass` in the desktop file, so GNOME would show it as a separate app.
 
 > 📝 *Write here: how did it feel to open your iCloud notes from the GNOME launcher?*
+
+### Addendum: "All iCloud"
+
+Apple Notes has an "All iCloud" entry above the folders, and amadeuz now has one too. It is not
+a real folder, so it can't come from the folder list that mirrors iCloud. It's a separate one-row
+list placed above it, and selecting either list clears the other. It shows every note except
+those in Recently Deleted, each row already showing its folder name. "+" there creates the
+note in Notes, as Apple does. One small behaviour changed with it: moving a note used to always
+close it in the editor, since it left the folder on screen. In "All iCloud" it stays in the list,
+so it now stays open.
+
+> 📝 *Write here: do you browse by folder, or mostly through "All iCloud"?*

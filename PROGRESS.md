@@ -583,6 +583,7 @@ Default server: `ws://localhost:8080/ws`
 | Move notes between folders; recover from Recently Deleted (right-click on a note) | ✅ verified by user on Mac build |
 | Cached notes editable before sync finishes; local changes survive an older sync snapshot | ✅ creating during the background sync verified by user |
 | "+" menus: new iCloud note from any view, new iCloud folder from the sidebar | ✅ |
+| "All iCloud" sidebar entry above the folders: every note except Recently Deleted; "+" there creates in Notes | ⏳ built, not yet tried by user |
 | Busy-zone errors (`TRY_AGAIN_LATER`, HTTP 409) retried automatically; sync no longer blocks writes | ✅ |
 | Delete note: trash → Recently Deleted; in Recently Deleted → permanent (note + attachments `Deleted`) | ⏳ trash verified by user (needed retries); retries now automatic |
 | Edit existing note (CRDT operations; all folders except Recently Deleted since Oct 2026) | ⏳ used by user in Folder Sync Test without errors; Mac-side result not yet confirmed |

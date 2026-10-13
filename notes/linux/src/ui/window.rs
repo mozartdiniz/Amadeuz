@@ -88,6 +88,8 @@ mod imp {
         pub icloud_section: RefCell<Option<gtk::Box>>,
         pub icloud_header: RefCell<Option<gtk::Label>>,
         pub icloud_folder_list: RefCell<Option<gtk::ListBox>>,
+        /// The fixed "All iCloud" row above the folders.
+        pub icloud_all_list: RefCell<Option<gtk::ListBox>>,
         pub icloud_filter_folder: RefCell<Option<String>>,
         pub icloud_filter: RefCell<Option<gtk::CustomFilter>>,
         pub icloud_filter_model: RefCell<Option<gtk::FilterListModel>>,

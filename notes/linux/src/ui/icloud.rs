@@ -8,7 +8,7 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::glib;
 
-use crate::icloud_manager::{ICloudManager, ICloudRef, ICloudStatus, SaveStatus, SignInStep};
+use crate::icloud_manager::{ICloudManager, ICloudRef, ICloudStatus, SaveStatus, SignInStep, DEFAULT_FOLDER};
 use crate::model::{AmzFolder, AmzNote};
 use crate::ui::AmzNoteRow;
 
@@ -17,6 +17,9 @@ use super::window::{folder_name_for, AmzWindow};
 /// Sidebar selection marker so the window doesn't auto-select "All Notes"
 /// while an iCloud folder is shown.
 pub const ICLOUD_SELECTION: &str = "__icloud__";
+
+/// Pseudo folder id for "All iCloud": every note outside Recently Deleted.
+const ICLOUD_ALL: &str = "__icloud_all__";
 
 impl AmzWindow {
     pub fn set_icloud(&self, icloud: ICloudRef) {
@@ -174,6 +177,33 @@ impl AmzWindow {
         header.append(&refresh);
         section.append(&header);
 
+        // "All iCloud" is not a real folder, so it lives in its own list above
+        // the model-bound one; the two keep a single selection between them.
+        let all_list = gtk::ListBox::new();
+        all_list.set_selection_mode(gtk::SelectionMode::Single);
+        all_list.add_css_class("navigation-sidebar");
+        {
+            let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row_box.set_margin_start(12);
+            row_box.set_margin_end(12);
+            row_box.set_margin_top(8);
+            row_box.set_margin_bottom(8);
+            row_box.append(&gtk::Image::from_icon_name("weather-overcast-symbolic"));
+            let label = gtk::Label::new(Some("All iCloud"));
+            label.set_halign(gtk::Align::Start);
+            label.set_hexpand(true);
+            row_box.append(&label);
+            let row = gtk::ListBoxRow::new();
+            row.set_child(Some(&row_box));
+            all_list.append(&row);
+        }
+        all_list.connect_row_activated(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_, _| win.on_icloud_folder_selected(ICLOUD_ALL.into())
+        ));
+        section.append(&all_list);
+
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::Single);
         list.add_css_class("navigation-sidebar");
@@ -243,6 +273,7 @@ impl AmzWindow {
         imp.icloud_section.replace(Some(section));
         imp.icloud_header.replace(Some(title));
         imp.icloud_folder_list.replace(Some(list));
+        imp.icloud_all_list.replace(Some(all_list));
     }
 
     pub(super) fn refresh_icloud_ui(&self) {
@@ -318,6 +349,10 @@ impl AmzWindow {
         imp.all_notes_list.unselect_all();
         imp.folder_list.unselect_all();
         imp.wastebasket_list.unselect_all();
+        let other = if folder_id == ICLOUD_ALL { &imp.icloud_folder_list } else { &imp.icloud_all_list };
+        if let Some(list) = other.borrow().as_ref() {
+            list.unselect_all();
+        }
         if let Some(mgr) = imp.manager.borrow().clone() {
             let mut m = mgr.borrow_mut();
             m.selected_folder_id = Some(ICLOUD_SELECTION.into());
@@ -333,7 +368,10 @@ impl AmzWindow {
         imp.delete_note_button.set_sensitive(false);
         self.set_icloud_editable(false);
         imp.icloud_open_note.replace(None);
-        let writable = imp.icloud.borrow().as_ref().is_some_and(|i| i.borrow().is_writable_folder(&folder_id));
+        // In "All iCloud", "+" creates in Notes, as on Apple devices.
+        let writable = imp.icloud.borrow().as_ref().is_some_and(|i| {
+            i.borrow().is_writable_folder(if folder_id == ICLOUD_ALL { DEFAULT_FOLDER } else { &folder_id })
+        });
         imp.new_note_button.set_sensitive(writable);
         imp.icloud_filter_folder.replace(Some(folder_id));
         self.refilter_icloud();
@@ -351,8 +389,10 @@ impl AmzWindow {
         self.flush_icloud_save();
         imp.icloud_open_note.replace(None);
         imp.icloud_mode.set(false);
-        if let Some(list) = imp.icloud_folder_list.borrow().as_ref() {
-            list.unselect_all();
+        for list in [&imp.icloud_folder_list, &imp.icloud_all_list] {
+            if let Some(list) = list.borrow().as_ref() {
+                list.unselect_all();
+            }
         }
         imp.delete_note_button.set_sensitive(true);
         imp.text_view.set_editable(true);
@@ -377,7 +417,12 @@ impl AmzWindow {
             let Some(win) = win_weak.upgrade() else { return true };
             let imp = win.imp();
             let Some(note) = obj.downcast_ref::<AmzNote>() else { return true };
-            if imp.icloud_filter_folder.borrow().as_deref() != Some(note.folder_id().as_str()) {
+            let folder_id = note.folder_id();
+            let shown = match imp.icloud_filter_folder.borrow().as_deref() {
+                Some(ICLOUD_ALL) => !folder_id.starts_with("TrashFolder"),
+                f => f == Some(folder_id.as_str()),
+            };
+            if !shown {
                 return false;
             }
             let search = imp.note_filter_search.borrow().clone();
@@ -513,7 +558,10 @@ impl AmzWindow {
 
     pub(super) fn create_icloud_note(&self) {
         let imp = self.imp();
-        let Some(folder) = imp.icloud_filter_folder.borrow().clone() else { return };
+        let Some(mut folder) = imp.icloud_filter_folder.borrow().clone() else { return };
+        if folder == ICLOUD_ALL {
+            folder = DEFAULT_FOLDER.into();
+        }
         self.flush_icloud_save();
         if let Some(icloud) = imp.icloud.borrow().as_ref() {
             icloud.borrow().create_note(folder);
@@ -879,11 +927,15 @@ impl AmzWindow {
         dialog.present(Some(self));
     }
 
-    /// A note was moved out of the open folder or deleted.
+    /// A note was moved or deleted. Clear the editor if it left the list (a
+    /// move between folders keeps it in "All iCloud").
     fn on_icloud_note_removed(&self, id: &str) {
         let imp = self.imp();
         self.refilter_icloud();
-        if imp.icloud_open_note.borrow().as_deref() == Some(id) {
+        let still_listed = imp.icloud_filter_model.borrow().as_ref().is_some_and(|m| {
+            (0..m.n_items()).any(|i| m.item(i).and_downcast::<AmzNote>().is_some_and(|n| n.id() == id))
+        });
+        if !still_listed && imp.icloud_open_note.borrow().as_deref() == Some(id) {
             imp.icloud_open_note.replace(None);
             self.set_icloud_editable(false);
             self.clear_editor();
