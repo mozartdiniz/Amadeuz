@@ -4,6 +4,7 @@ server/note.json
 # ── Go ────────────────────────────────────────────────────────────────────────
 go.sum
 /server/amadeuz
+/server/server
 /server/amadeuz.exe
 /server/blobs/
 /server/amadeuz.db
