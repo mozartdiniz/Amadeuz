@@ -999,7 +999,7 @@ impl AmzWindow {
 
         let body = error.unwrap_or_else(|| {
             "Your notes stay in iCloud and are shown read-only. Your password goes only to \
-             Apple; the sign-in session is kept in your system keyring."
+             Apple. The sign-in is kept in your system keyring and shared with Leporello."
                 .into()
         });
         let dialog = adw::AlertDialog::new(Some("Connect iCloud"), Some(&body));
@@ -1126,7 +1126,10 @@ impl AmzWindow {
     pub(super) fn prompt_icloud_disconnect(&self) {
         let dialog = adw::AlertDialog::new(
             Some("Disconnect iCloud?"),
-            Some("Your notes stay in iCloud. They will no longer be shown in Amadeuz Notes."),
+            Some(
+                "Your notes stay in iCloud. They will no longer be shown in Amadeuz Notes. \
+                 Apps that share this sign-in, like Leporello, will ask you to sign in again.",
+            ),
         );
         dialog.add_response("cancel", "Cancel");
         dialog.add_response("disconnect", "Disconnect");

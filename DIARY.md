@@ -2957,3 +2957,40 @@ close it in the editor, since it left the folder on screen. In "All iCloud" it s
 so it now stays open.
 
 > 📝 *Write here: do you browse by folder, or mostly through "All iCloud"?*
+
+### Addendum: why sign-in kept coming back
+
+Every few launches the app asked for the Apple ID again, even though the session is saved in
+the keyring. Leporello, the Reminders sibling, did the same. The keyring entries turned out to
+be gone. The `keyring` crate was built with its `linux-native` feature, which, despite the
+comment next to it in `Cargo.toml`, is not GNOME Keyring at all. It's the kernel's keyutils
+store, which lives only in memory. It is cleared on every reboot, and its persistent keyring
+expires after a few idle days. So the saved session vanished and there was nothing to restore.
+
+The fix is a one-word feature change: `sync-secret-service` stores the session in the Secret
+Service on D-Bus (GNOME Keyring, or oo7 here), which is encrypted on disk and survives reboots.
+Once the session survives, Apple's own rules decide how long it stays valid. When it does
+expire, the kept trust token means signing in again needs only the password, not a 2FA code.
+
+> 📝 *Write here: how many times did you type that 2FA code before noticing the pattern?*
+
+### Addendum: one sign-in for Notes and Reminders
+
+Leporello, the Reminders sibling, uses the same iCloud web session as amadeuz, and each app
+asked for its own sign-in. Now they share one keyring entry (`io.github.mozartdiniz.iCloud` /
+`web-session`), so signing in to either app signs in both. That's possible because an
+icloud.com session is account-wide: the same cookies open the Notes and the Reminders
+containers. A session saved under the old per-app entry moves over on first launch.
+
+Two details made it work in practice. Leporello stays running in the background for its
+alerts, so it can't rely on reading the keyring only at startup. While it's signed out, it
+looks once a minute for a session that's newer than the last one it saw. Amadeuz is opened
+and closed more often, so launch covers most cases. When its session has expired, Refresh
+first tries whatever the keyring holds now. Signing out of either app deletes the shared
+entry, which is the honest meaning of "sign out of iCloud" here. The dialogs say so.
+
+The CRDT replica UUID lives inside the saved session, so both apps now edit as the same
+replica. That's harmless: a replica's clock is tracked per document, and Notes and
+Reminders never touch each other's documents.
+
+> 📝 *Write here: does "one sign-in" change how these apps feel as a family?*

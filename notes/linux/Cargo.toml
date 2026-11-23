@@ -27,7 +27,7 @@ amadeuz-icloud = { path = "icloud" }
 
 # No Linux, usamos as features para Secret Service
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["linux-native", "crypto-rust"] }
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 # No Windows, usamos apenas o necessário para o Credential Manager
 [target.'cfg(windows)'.dependencies]

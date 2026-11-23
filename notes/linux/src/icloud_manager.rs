@@ -275,7 +275,11 @@ impl ICloudManager {
             // Clone out of the lock: holding it for the whole download would
             // make creates and saves wait for the sync.
             let snapshot_client = client.lock().await.clone();
-            let event = match snapshot_client.fetch_all().await {
+            let res = match snapshot_client.fetch_all().await {
+                Err(ICloudError::SessionExpired) => adopt_saved_session(&client).await,
+                res => res,
+            };
+            let event = match res {
                 Ok(snap) => ICloudEvent::Synced(snap),
                 Err(e) => sync_failed(e),
             };
@@ -985,6 +989,17 @@ async fn validate_and_fetch(
     // Apple may refresh cookies on validate; persist only if something changed.
     crate::backend::keyring::save_icloud_session(c.save(), previous).await.ok();
     c.fetch_all().await
+}
+
+/// Our session expired, but Leporello shares the keyring entry and may have
+/// signed in again since: try the saved session before giving up.
+async fn adopt_saved_session(client: &Arc<Mutex<ICloudClient>>) -> amadeuz_icloud::Result<Snapshot> {
+    let saved = crate::backend::keyring::load_icloud_session().await.ok().flatten();
+    let Some(restored) = saved.as_deref().and_then(|s| ICloudClient::restore(s).ok()) else {
+        return Err(ICloudError::SessionExpired);
+    };
+    *client.lock().await = restored;
+    validate_and_fetch(client, saved.as_deref()).await
 }
 
 fn sync_failed(e: ICloudError) -> ICloudEvent {

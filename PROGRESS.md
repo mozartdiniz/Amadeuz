@@ -572,7 +572,7 @@ Default server: `ws://localhost:8080/ws`
 | Step | Status |
 |------|:------:|
 | Apple ID sign-in (SRP-6a) + 2FA (trusted device or SMS) | ✅ verified live |
-| Session save/restore (tokens + cookies → keyring) | ✅ reuse confirmed with the probe (app relaunch not yet reported); single keyring entry except on Windows (split for the 2560-byte cap) |
+| Session save/restore (tokens + cookies → keyring) | ✅ reuse confirmed with the probe (app relaunch not yet reported); single keyring entry except on Windows (split for the 2560-byte cap). Linux uses Secret Service (`sync-secret-service`); the earlier `linux-native` (kernel keyutils, in-memory) lost the session on reboot |
 | List folders + notes (CloudKit `changes/zone`) | ✅ verified live (655 notes, 19 folders) |
 | Decode note body → Markdown | ✅ 655/655 decoded live; Markdown fidelity not yet reviewed |
 | GTK integration (sign-in + 2FA dialogs, iCloud sidebar section, read-only viewer) | ✅ verified by user: all notes in correct folders, new Apple-side folder appears |
@@ -597,7 +597,7 @@ Default server: `ws://localhost:8080/ws`
 
 **GTK side:** `src/icloud_manager.rs` (separate stores, event channel like `NotesManager`),
 `src/ui/icloud.rs` (sidebar section built in code, so `.blp` and the hand-maintained `.ui` stay untouched),
-main menu → "Connect iCloud…". Session in the keyring under `com.amadeuz.Notes` / `icloud-session`,
+main menu → "Connect iCloud…". Session in the keyring under `io.github.mozartdiniz.iCloud` / `web-session`, shared with Leporello (one sign-in for both; the old `com.amadeuz.Notes` / `icloud-session` entry is migrated on load),
 split into 600-char chunks (Windows Credential Manager caps a secret at 2560 bytes).
 iCloud notes are never written to `data.json`. A separate cache (`<user data dir>/amadeuz/icloud-cache.json`) is shown instantly at launch while a background sync runs; the sync result replaces it (remote wins). Editing data is cached only for notes in the writable folder. Disconnect deletes it.
 
