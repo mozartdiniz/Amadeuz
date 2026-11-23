@@ -572,7 +572,7 @@ Default server: `ws://localhost:8080/ws`
 | Step | Status |
 |------|:------:|
 | Apple ID sign-in (SRP-6a) + 2FA (trusted device or SMS) | ✅ verified live |
-| Session save/restore (tokens + cookies → keyring) | ✅ reuse confirmed with the probe (app relaunch not yet reported); single keyring entry except on Windows (split for the 2560-byte cap). Linux uses Secret Service (`sync-secret-service`); the earlier `linux-native` (kernel keyutils, in-memory) lost the session on reboot |
+| Session save/restore (tokens + cookies → keyring) | ✅ reuse confirmed with the probe (app relaunch not yet reported); single keyring entry except on Windows (split for the 2560-byte cap). Linux uses Secret Service (`sync-secret-service`); the earlier `linux-native` (kernel keyutils, in-memory) lost the session on reboot. An expired session is renewed in the background with the saved password + trust token (`validate_or_renew`; never pushes a 2FA code; a rejected password is deleted) |
 | List folders + notes (CloudKit `changes/zone`) | ✅ verified live (655 notes, 19 folders) |
 | Decode note body → Markdown | ✅ 655/655 decoded live; Markdown fidelity not yet reviewed |
 | GTK integration (sign-in + 2FA dialogs, iCloud sidebar section, read-only viewer) | ✅ verified by user: all notes in correct folders, new Apple-side folder appears |

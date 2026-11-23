@@ -2994,3 +2994,24 @@ replica. That's harmless: a replica's clock is tracked per document, and Notes a
 Reminders never touch each other's documents.
 
 > 📝 *Write here: does "one sign-in" change how these apps feel as a family?*
+
+### Addendum: renewing the sign-in in the background
+
+Keeping the session in the right keyring wasn't the whole story. Apple itself expires an icloud.com
+session after a few days without use, even though its cookies say 30 days. On the Mac, Notes and
+Reminders never notice, because they use the device's own account token, which a web client can't get.
+
+What a web client can do is what icloud.com does when you come back after a while: sign in again with the
+password, presenting the trust token that the 2FA step left behind. Apple accepts that without a code as
+long as it still trusts this computer. So the password now lives in the keyring next to the session,
+shared by both apps, and an expired session is renewed with it quietly, at launch or when a sync is refused.
+Two rules keep this safe. The background path never asks Apple for a code (that would buzz the iPhone),
+and a password Apple rejects is deleted at once, so the app can't retry it and lock the Apple ID.
+Signing out removes both.
+
+Reusing the saved session token for `accountLogin` looked like a way to skip the password, but Apple
+answers 421: the token is good once, at sign-in. When the trust itself runs out (about three months), a
+code is needed again. That part is Apple's rule.
+
+> 📝 *Write here: how long did it stay signed in this time?*
+

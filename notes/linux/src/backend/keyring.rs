@@ -9,6 +9,10 @@ const ICLOUD_SERVICE: &str = "io.github.mozartdiniz.iCloud";
 const ICLOUD_USER: &str = "web-session";
 /// Where this app kept its own session before the entry was shared.
 const LEGACY_ICLOUD_USER: &str = "icloud-session";
+/// The Apple ID password, also shared with Leporello: an expired session is
+/// renewed with it in the background (no 2FA code while Apple trusts this
+/// computer). Signing out deletes it.
+const ICLOUD_PASSWORD_USER: &str = "apple-id-password";
 
 /// Windows Credential Manager caps a secret at 2560 bytes; the iCloud session
 /// (tokens + cookies) is larger, so on Windows it is split across entries.
@@ -70,9 +74,23 @@ fn chunk_count(head: &str) -> Option<usize> {
     head.strip_prefix("chunks:")?.parse().ok()
 }
 
+pub async fn load_icloud_password() -> Result<Option<String>> {
+    load(ICLOUD_SERVICE, ICLOUD_PASSWORD_USER).await
+}
+
+pub async fn save_icloud_password(password: String) -> Result<()> {
+    save(ICLOUD_SERVICE, ICLOUD_PASSWORD_USER, password).await
+}
+
+/// Apple refused it: forget it, so renewals don't keep trying it.
+pub async fn delete_icloud_password() -> Result<()> {
+    delete(ICLOUD_SERVICE, ICLOUD_PASSWORD_USER).await
+}
+
 /// Signs out every app that shares the session.
 pub async fn delete_icloud_session() -> Result<()> {
     delete_chunked(ICLOUD_SERVICE, ICLOUD_USER).await?;
+    delete_icloud_password().await?;
     delete_chunked(SERVICE, LEGACY_ICLOUD_USER).await
 }
 

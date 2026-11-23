@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use amadeuz_icloud::notebody::{self, Rendered};
-use amadeuz_icloud::{Error as ICloudError, ICloudClient, SignInOutcome, Snapshot, TrustedPhone};
+use amadeuz_icloud::{Error as ICloudError, ICloudClient, Renewal, SignInOutcome, Snapshot, TrustedPhone};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use tokio::sync::Mutex;
@@ -114,6 +114,9 @@ pub struct ICloudManager {
     saving: bool,
     /// A note is being created; further "+" presses are ignored until it lands.
     creating: std::cell::Cell<bool>,
+    /// The password typed into the sign-in dialog, kept until the sign-in
+    /// (and any 2FA code) succeeds, then stored for background renewals.
+    pending_password: RefCell<Option<String>>,
     queued: Option<(String, String)>,
     pub save_status: SaveStatus,
     event_tx: async_channel::Sender<ICloudEvent>,
@@ -159,6 +162,7 @@ impl ICloudManager {
             folders_renamed_since_sync: HashMap::new(),
             saving: false,
             creating: std::cell::Cell::new(false),
+            pending_password: RefCell::new(None),
             queued: None,
             save_status: SaveStatus::Idle,
             event_tx: tx,
@@ -216,6 +220,7 @@ impl ICloudManager {
     }
 
     pub fn sign_in(&self, apple_id: String, password: String) {
+        self.pending_password.replace(Some(password.clone()));
         let client = self.client.clone();
         let tx = self.event_tx.clone();
         crate::spawn(async move {
@@ -589,7 +594,10 @@ impl ICloudManager {
             ICloudEvent::SignIn(Ok(SignInOutcome::NeedsCode { phones })) => {
                 step(&mgr, SignInStep::NeedsCode(phones));
             }
-            ICloudEvent::SignIn(Err(msg)) => step(&mgr, SignInStep::Failed(msg)),
+            ICloudEvent::SignIn(Err(msg)) => {
+                mgr.borrow().pending_password.replace(None);
+                step(&mgr, SignInStep::Failed(msg))
+            }
             ICloudEvent::Code(Err(CodeError::Wrong)) => step(&mgr, SignInStep::WrongCode),
             ICloudEvent::Code(Err(CodeError::Other(msg))) => step(&mgr, SignInStep::Failed(msg)),
             ICloudEvent::CodeSent(msg) => step(&mgr, SignInStep::CodeSent(msg)),
@@ -786,14 +794,20 @@ impl ICloudManager {
 
     /// Persist the new session, then load the notes.
     fn after_sign_in(mgr: &ICloudRef) {
-        let (client, tx) = {
+        let (client, tx, password) = {
             let mut m = mgr.borrow_mut();
             m.status = ICloudStatus::Syncing;
             m.mark_sync_start();
-            (m.client.clone(), m.event_tx.clone())
+            let password = m.pending_password.take();
+            (m.client.clone(), m.event_tx.clone(), password)
         };
         notify(mgr);
         crate::spawn(async move {
+            if let Some(password) = password {
+                if let Err(e) = crate::backend::keyring::save_icloud_password(password).await {
+                    log::warn!("could not save the Apple ID password to keyring: {e}");
+                }
+            }
             let saved = client.lock().await.save();
             if let Err(e) = crate::backend::keyring::save_icloud_session(saved, None).await {
                 log::warn!("could not save iCloud session to keyring: {e}");
@@ -984,7 +998,19 @@ async fn validate_and_fetch(
     // Work on a copy (clients share the cookie jar) so the lock is only held
     // for an instant and creates/saves can run while the sync downloads.
     let mut c = client.lock().await.clone();
-    c.validate().await?;
+    // If Apple has expired the session, renew it with the saved password and
+    // the trust token (no 2FA code; never pushes one).
+    let password = crate::backend::keyring::load_icloud_password().await.ok().flatten();
+    match c.validate_or_renew(password.as_deref()).await {
+        Ok(Renewal::Valid) => {}
+        Ok(how) => log::info!("iCloud session renewed in the background ({how:?})"),
+        Err(ICloudError::BadCredentials) => {
+            // Wrong saved password: forget it, or repeated tries could lock the Apple ID.
+            crate::backend::keyring::delete_icloud_password().await.ok();
+            return Err(ICloudError::SessionExpired);
+        }
+        Err(e) => return Err(e),
+    }
     *client.lock().await = c.clone();
     // Apple may refresh cookies on validate; persist only if something changed.
     crate::backend::keyring::save_icloud_session(c.save(), previous).await.ok();

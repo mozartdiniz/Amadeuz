@@ -14,7 +14,7 @@ pub mod table;
 mod srp;
 pub mod wire;
 
-pub use auth::{ICloudClient, SignInOutcome, TrustedPhone};
+pub use auth::{ICloudClient, Renewal, SignInOutcome, TrustedPhone};
 pub use cloudkit::{ICloudFolder, ICloudNote, Snapshot};
 
 #[derive(Debug, thiserror::Error)]

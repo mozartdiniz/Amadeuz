@@ -999,7 +999,9 @@ impl AmzWindow {
 
         let body = error.unwrap_or_else(|| {
             "Your notes stay in iCloud and are shown read-only. Your password goes only to \
-             Apple. The sign-in is kept in your system keyring and shared with Leporello."
+             Apple. The sign-in is kept in your system keyring and shared with Leporello, and \
+             so is your password, so an expired sign-in can be renewed without you. \
+             Signing out removes both."
                 .into()
         });
         let dialog = adw::AlertDialog::new(Some("Connect iCloud"), Some(&body));
